@@ -35,8 +35,10 @@ export function createSimFeed({ onTrade }) {
         const r = s.drift + (Math.random() - 0.5) * 2 * s.vol + shock
         s.price = Math.max(1, s.price * (1 + r))
         // odd lots most of the time, a block print now and then
+        // block prints are rare on a real mega-cap tape; keep the synthetic one
+        // honest or the battlefield looks nothing like the live version
         const size =
-          Math.random() < 0.02
+          Math.random() < 0.006
             ? 400 + Math.floor(Math.random() * 3000)
             : 1 + Math.floor(Math.random() * 120)
         onTrade({
