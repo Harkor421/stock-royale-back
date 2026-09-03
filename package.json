@@ -1,0 +1,17 @@
+{
+  "name": "stock-royale-back",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Reads live US stock prints via Finnhub, runs a 5-minute battle-royale round between 8 mega-caps, and streams normalized battlefield events to the frontend over WebSocket.",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "sim": "SIM=1 node src/index.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.0"
+  }
+}
