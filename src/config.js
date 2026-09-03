@@ -62,11 +62,50 @@ export const THRESH = Object.freeze({
   whale: Number(process.env.T_WHALE || 150_000),
 })
 
-export function classify(notional) {
+/** Absolute floors: a print has to be worth real money to ever be a block. */
+export const FLOOR = Object.freeze({
+  fish: Number(process.env.F_FISH || 4_000),
+  dolphin: Number(process.env.F_DOLPHIN || 20_000),
+  whale: Number(process.env.F_WHALE || 45_000),
+})
+
+/** Percentile cutoffs, as a fraction of a symbol's own recent prints. */
+export const PCTL = Object.freeze({
+  fish: Number(process.env.P_FISH || 0.7),
+  dolphin: Number(process.env.P_DOLPHIN || 0.94),
+  whale: Number(process.env.P_WHALE || 0.99),
+})
+
+export function classifyAbsolute(notional) {
   if (notional >= THRESH.whale) return 'whale'
   if (notional >= THRESH.dolphin) return 'dolphin'
   if (notional >= THRESH.fish) return 'fish'
   return 'shrimp'
+}
+
+const RANK = { shrimp: 0, fish: 1, dolphin: 2, whale: 3 }
+const NAME = ['shrimp', 'fish', 'dolphin', 'whale']
+
+/**
+ * A print's size class, judged BOTH ways and given the better of the two.
+ *
+ * Fixed dollar thresholds alone don't survive the day: at the open a $50K print
+ * is unremarkable, and after 16:00 ET the whole tape thins out until nothing
+ * clears any bar and the battlefield goes quiet for minutes. So a print is also
+ * measured against that symbol's OWN recent prints — top 1% is a whale wherever
+ * the session is — with the absolute floors making sure a big fish in an empty
+ * pond is still a fish.
+ */
+export function classify(notional, percentile = null) {
+  let r = RANK[classifyAbsolute(notional)]
+  if (percentile != null) {
+    let pr = 0
+    if (percentile >= PCTL.whale && notional >= FLOOR.whale) pr = 3
+    else if (percentile >= PCTL.dolphin && notional >= FLOOR.dolphin) pr = 2
+    else if (percentile >= PCTL.fish && notional >= FLOOR.fish) pr = 1
+    if (pr > r) r = pr
+  }
+  return NAME[r]
 }
 
 if (!config.finnhubKey && !config.sim) {

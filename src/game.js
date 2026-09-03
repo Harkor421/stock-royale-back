@@ -21,6 +21,7 @@ import { sessionInfo } from './marketHours.js'
 import { fetchQuotes } from './finnhub.js'
 
 const W = config.windowSec
+const SIZE_SAMPLE = 256
 let eventSeq = 0
 const nextId = () => `e${(eventSeq = (eventSeq + 1) % 1e9)}`
 
@@ -50,6 +51,11 @@ function makeSymbol(t) {
     throttleSec: 0,
     throttleCount: 0,
     blockCount: 0,
+    // a rolling sample of this symbol's own print sizes, so "big" can be judged
+    // relative to the session it is actually in
+    sizes: new Float64Array(SIZE_SAMPLE),
+    sizeN: 0,
+    sizeHead: 0,
   }
 }
 
@@ -221,6 +227,17 @@ export function createGame({ onEvent }) {
     S.pct = S.baseline > 0 ? (price / S.baseline - 1) * 100 : 0
 
     const notional = price * size
+
+    // where this print sits among the symbol's recent ones (0..1)
+    let percentile = null
+    if (S.sizeN >= 40) {
+      let below = 0
+      for (let k = 0; k < S.sizeN; k++) if (S.sizes[k] < notional) below++
+      percentile = below / S.sizeN
+    }
+    S.sizes[S.sizeHead] = notional
+    S.sizeHead = (S.sizeHead + 1) % SIZE_SAMPLE
+    if (S.sizeN < SIZE_SAMPLE) S.sizeN++
     const i = nowSec % W
     if (side === 'buy') {
       S.buyBuf[i] += notional
@@ -239,7 +256,7 @@ export function createGame({ onEvent }) {
     // are the tanks. So: whales always pass, blocks get their own budget, and
     // ordinary prints share the rest. Dropped prints still count in the
     // standings — only their soldier spawn is skipped.
-    const bucket = classify(notional)
+    const bucket = classify(notional, percentile)
     if (S.throttleSec !== nowSec) {
       S.throttleSec = nowSec
       S.throttleCount = 0
