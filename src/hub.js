@@ -14,7 +14,7 @@
 import http from 'http'
 import { WebSocketServer } from 'ws'
 
-export function createHub({ port, game }) {
+export function createHub({ port, game, db }) {
   const clients = new Set()
   let distributor = null
 
@@ -32,11 +32,32 @@ export function createHub({ port, game }) {
       return json({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null })
     }
     if (url.pathname === '/history') return json({ history: game.history })
+
+    // --- the public record: who has been paid what, ever ---
+    if (url.pathname === '/leaderboard') {
+      return db
+        .leaderboard(Number(url.searchParams.get('limit') || 100))
+        .then(json)
+        .catch((e) => json({ ready: false, rows: [], error: e.message }))
+    }
+    if (url.pathname === '/rounds') {
+      return db
+        .roundHistory(Number(url.searchParams.get('limit') || 50))
+        .then(json)
+        .catch((e) => json({ ready: false, rows: [], error: e.message }))
+    }
+    if (url.pathname.startsWith('/wallet/')) {
+      return db
+        .walletHistory(decodeURIComponent(url.pathname.slice('/wallet/'.length)))
+        .then(json)
+        .catch((e) => json({ ready: false, rows: [], error: e.message }))
+    }
     res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
     res.end(
       `Stock Royale backend — ${clients.size} viewer(s), ${game.session.label}.\n` +
         'Connect a WebSocket to this same URL for the live event stream.\n' +
-        'JSON: /state · /history\n'
+        'JSON: /state · /history · /leaderboard · /rounds · /wallet/<address>\n' +
+        `Persistence: ${db?.ready ? 'on' : 'off'}\n`
     )
   })
 

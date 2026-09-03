@@ -55,7 +55,7 @@ export const STOCK_TOKENS = Object.freeze({
   TSLA: '0x322F0929c4625eD5bAd873c95208D54E1c003b2d',
 })
 
-export function createDistributor({ onEvent }) {
+export function createDistributor({ onEvent, db }) {
   const c = config.chain
   const enabled = c.airdrop
   const provider = c.rpcUrl ? new ethers.JsonRpcProvider(c.rpcUrl, c.chainId) : null
@@ -432,6 +432,20 @@ export function createDistributor({ onEvent }) {
       })
 
       const { items, totalSent } = await distribute(winner.symbol, address, buy.dec, round)
+
+      // File it before announcing it: the leaderboard the frontend is about to
+      // let people open should already have this round in it.
+      await db?.recordDistribution({
+        round,
+        ticker: winner.symbol,
+        name: winner.name,
+        usdPerUnit: winner.price || null,
+        items,
+        buy: { amount: buy.amount, eth: buy.eth, tx: buy.tx },
+        dryRun,
+        demo: !!holders?.demo,
+      })
+
       emit({
         type: 'airdropResult',
         round,
@@ -439,6 +453,8 @@ export function createDistributor({ onEvent }) {
         name: winner.name,
         color: winner.color,
         totalSent,
+        totalUsd: winner.price ? totalSent * winner.price : null,
+        usdPerUnit: winner.price || null,
         count: items.length,
         items,
         buy: { amount: buy.amount, eth: buy.eth, tx: buy.tx, txUrl: explorerTx(buy.tx) },

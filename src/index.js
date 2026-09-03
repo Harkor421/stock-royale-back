@@ -8,6 +8,7 @@ import { createHub } from './hub.js'
 import { createFinnhubFeed } from './finnhub.js'
 import { createSimFeed } from './simFeed.js'
 import { createDistributor } from './distributor.js'
+import { createDb } from './db.js'
 
 let hub = null
 let distributor = null
@@ -24,8 +25,11 @@ const game = createGame({
   },
 })
 
-hub = createHub({ port: config.port, game })
-distributor = createDistributor({ onEvent: (e) => hub.broadcast(e) })
+const db = createDb(config.mongoUrl)
+await db.connect()
+
+hub = createHub({ port: config.port, game, db })
+distributor = createDistributor({ onEvent: (e) => hub.broadcast(e), db })
 hub.attachDistributor(distributor)
 
 const feed = config.sim
@@ -47,6 +51,7 @@ function shutdown() {
   game.stop()
   distributor.stop()
   hub.close()
+  db.close()
   process.exit(0)
 }
 process.on('SIGINT', shutdown)
