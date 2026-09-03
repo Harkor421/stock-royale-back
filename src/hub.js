@@ -16,6 +16,7 @@ import { WebSocketServer } from 'ws'
 
 export function createHub({ port, game }) {
   const clients = new Set()
+  let distributor = null
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
@@ -27,7 +28,9 @@ export function createHub({ port, game }) {
       })
       res.end(JSON.stringify(body))
     }
-    if (url.pathname === '/state') return json(game.snapshot())
+    if (url.pathname === '/state') {
+      return json({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null })
+    }
     if (url.pathname === '/history') return json({ history: game.history })
     res.writeHead(200, { 'content-type': 'text/plain', 'cache-control': 'no-store' })
     res.end(
@@ -42,7 +45,7 @@ export function createHub({ port, game }) {
   wss.on('connection', (client) => {
     clients.add(client)
     try {
-      client.send(JSON.stringify(game.snapshot()))
+      client.send(JSON.stringify({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null }))
     } catch {}
     client.on('message', (raw) => {
       let msg
@@ -73,6 +76,9 @@ export function createHub({ port, game }) {
 
   return {
     broadcast,
+    attachDistributor(d) {
+      distributor = d
+    },
     get viewers() {
       return clients.size
     },
