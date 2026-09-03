@@ -44,16 +44,22 @@ export const TICKERS = Object.freeze([
 export const SYMBOLS = TICKERS.map((t) => t.symbol)
 
 /**
- * Print-size buckets, in USD notional (price * shares). Calibrated for mega-cap
- * tape: the median print is an odd lot worth a few thousand dollars, so `fish`
- * starts where a real round lot begins and `whale` is a genuine block.
- *   shrimp  soldiers        fish  a squad + a name tag
+ * Print-size buckets, in USD notional (price * shares).
+ *
+ * Calibrated against the REAL tape, not a guess: watching the live feed, a
+ * typical mega-cap print is a 40–100 share odd lot worth $13K–$40K, and $69K is
+ * already a big one. The first cut of these thresholds (fish $25K / dolphin
+ * $150K / whale $500K) meant almost every real print landed in the smallest
+ * bucket, so the battlefield showed infantry and nothing else — no armour, no
+ * aircraft, no explosions, for minutes at a time.
+ *
+ *   shrimp  soldiers        fish  a squad + a price tag
  *   dolphin an APC          whale a tank, a jet, an explosion and a camera shake
  */
 export const THRESH = Object.freeze({
-  fish: Number(process.env.T_FISH || 25_000),
-  dolphin: Number(process.env.T_DOLPHIN || 150_000),
-  whale: Number(process.env.T_WHALE || 500_000),
+  fish: Number(process.env.T_FISH || 10_000),
+  dolphin: Number(process.env.T_DOLPHIN || 50_000),
+  whale: Number(process.env.T_WHALE || 150_000),
 })
 
 export function classify(notional) {
