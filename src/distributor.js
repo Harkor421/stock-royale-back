@@ -18,6 +18,7 @@
 
 import { ethers } from 'ethers'
 import { config, TICKERS } from './config.js'
+import { createChainHolders } from './chainHolders.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const now = () => Date.now()
@@ -60,6 +61,7 @@ export function createDistributor({ onEvent, db }) {
   const enabled = c.airdrop
   const provider = c.rpcUrl ? new ethers.JsonRpcProvider(c.rpcUrl, c.chainId) : null
   const wallet = c.privateKey && provider ? new ethers.Wallet(c.privateKey, provider) : null
+  const chain = provider ? createChainHolders({ provider, chainId: c.chainId }) : null
   const dryRun = c.dryRun || !wallet || !isAddr(c.token)
 
   const stockDecimals = new Map()
@@ -67,6 +69,10 @@ export function createDistributor({ onEvent, db }) {
   let tokenTotalSupply = 0n
   let holders = null // { ts, rows:[{address, raw, amount, pct}] }
   let contractHolders = new Set()
+  let poolSet = new Set() //   curves + AMM pools: never paid, always reported
+  let rpcPools = new Set() //  known infrastructure confirmed straight off-chain
+  let lastEligibleCount = 0
+  let diagnostics = null
   let wethApproved = false
   let busy = false
   let holdersTimer = null
@@ -78,12 +84,21 @@ export function createDistributor({ onEvent, db }) {
 
   // -- Blockscout --------------------------------------------------------
 
+  // Blockscout's public instance sits behind a WAF that answers 403 to requests
+  // with no User-Agent — which is what bare fetch() sends. Found the hard way:
+  // holder detection simply returned nothing, with no error that pointed at the
+  // cause. Identify ourselves on every call.
+  const HTTP_HEADERS = {
+    'user-agent': 'stock-royale/1.0 (+https://github.com/Harkor421/stock-royale-back)',
+    accept: 'application/json',
+  }
+
   async function getJson(base, path, params) {
     const url = new URL(base + path)
     for (const [k, v] of Object.entries(params || {})) {
       if (v != null) url.searchParams.set(k, String(v))
     }
-    const r = await fetch(url, { signal: AbortSignal.timeout(20_000) })
+    const r = await fetch(url, { headers: HTTP_HEADERS, signal: AbortSignal.timeout(20_000) })
     if (!r.ok) throw new Error(`${path} -> ${r.status}`)
     return r.json()
   }
@@ -135,12 +150,160 @@ export function createDistributor({ onEvent, db }) {
     try { tokenTotalSupply = await t.totalSupply() } catch {}
   }
 
+  /**
+   * Pools and bonding curves, found by the only rule that keeps working when a
+   * launchpad ships a new version: a CONTRACT sitting on a big share of supply
+   * is infrastructure, not a holder. Union of three sources, so no single one
+   * being wrong or down can let a curve through and hand it the biggest slice
+   * of an airdrop:
+   *   · contract holders over poolMinPct, from the indexer
+   *   · the single largest contract holder, whatever its size
+   *   · known addresses re-checked straight off the chain
+   */
+  function refreshPools(balances) {
+    const next = new Set(rpcPools)
+    if (tokenTotalSupply > 0n) {
+      const minRaw = (tokenTotalSupply * BigInt(Math.round(c.poolMinPct * 1000))) / 100_000n
+      let biggest = null
+      let biggestBal = 0n
+      for (const a of contractHolders) {
+        const b = balances.get(a) || 0n
+        if (b >= minRaw) next.add(a)
+        if (b > biggestBal) {
+          biggestBal = b
+          biggest = a
+        }
+      }
+      if (biggest) next.add(biggest)
+    }
+    poolSet = next
+    return poolSet
+  }
+
+  /** Confirm the known infrastructure addresses against the chain itself, so
+   *  pool detection survives the indexer being down or mislabelling them. */
+  async function refreshRpcPools() {
+    if (!provider || !isAddr(c.token) || !c.poolCandidates.length) return
+    try {
+      if (tokenTotalSupply === 0n) await loadTokenMeta()
+      if (tokenTotalSupply === 0n) return
+      const minRaw = (tokenTotalSupply * BigInt(Math.round(c.poolMinPct * 1000))) / 100_000n
+      const token = new ethers.Contract(c.token, ERC20_ABI, provider)
+      for (const a of c.poolCandidates) {
+        try {
+          const b = await token.balanceOf(a)
+          if (b >= minRaw) rpcPools.add(a)
+          else rpcPools.delete(a)
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('[airdrop] pool candidates:', e.message)
+    }
+  }
+
   const isExcluded = (addr) =>
     addr === ZERO ||
     addr === DEAD ||
     addr === wallet?.address?.toLowerCase() ||
     c.exclude.has(addr) ||
+    poolSet.has(addr) ||
     (c.excludeContracts && contractHolders.has(addr))
+
+  /**
+   * Re-read balances from the chain for the addresses about to be paid. The
+   * indexer decides WHO is in the list; the chain decides HOW MUCH. A lagging
+   * or truncated index then costs someone their place in the list, and never
+   * costs anyone the wrong number of shares.
+   */
+  async function verifyBalances(rows) {
+    if (!c.verifyOnchain || !provider || !rows.length) return rows
+    const take = rows.slice(0, c.verifyMax)
+    const token = new ethers.Contract(c.token, ERC20_ABI, provider)
+    const CONC = 8
+    let drift = 0
+    for (let i = 0; i < take.length; i += CONC) {
+      await Promise.all(
+        take.slice(i, i + CONC).map(async (r) => {
+          try {
+            const onchain = await token.balanceOf(r.address)
+            if (onchain !== r.raw) {
+              drift++
+              r.indexed = r.raw
+              r.raw = onchain
+              r.amount = fmtUnits(onchain, tokenDecimals)
+              r.pct = holdersSupply > 0 ? (r.amount / holdersSupply) * 100 : r.pct
+            }
+          } catch {
+            /* one RPC miss must not drop a holder — keep the indexed value */
+          }
+        })
+      )
+    }
+    if (drift) console.info(`[airdrop] ${drift}/${take.length} balances corrected against the chain`)
+    return rows
+  }
+
+  let holdersSupply = 0
+  let holdersSource = null
+
+  /**
+   * Get the holder set, from whichever source can actually answer.
+   *
+   *   1. Blockscout Pro (needs BLOCKSCOUT_API_KEY)
+   *   2. the public explorer — usually Cloudflare-blocked to servers, kept
+   *      because it works from some networks
+   *   3. the chain itself, replaying Transfer logs (no key, no indexer)
+   *
+   * Every failure is reported with the reason, because the way this breaks is
+   * by looking like a token with no holders.
+   */
+  async function fetchHolders() {
+    const tried = []
+    for (const [base, auth, label] of [
+      [c.blockscout, true, 'blockscout-pro'],
+      [c.blockscoutPublic, false, 'blockscout-public'],
+    ]) {
+      if (!base) continue
+      try {
+        const res = await crawlHolders(base, auth)
+        if (res.map.size) {
+          holdersSource = label
+          return res
+        }
+        tried.push(`${label}: returned no holders`)
+      } catch (e) {
+        const msg = String(e.message || e)
+        tried.push(
+          `${label}: ${msg}` +
+            (msg.includes('403') ? ' (Cloudflare challenge — this host blocks servers)' : '') +
+            (msg.includes('402') ? ' (needs BLOCKSCOUT_API_KEY)' : '')
+        )
+      }
+    }
+
+    if (c.chainFallback && chain) {
+      console.warn(`[airdrop] indexers unavailable (${tried.join(' · ')}) — rebuilding holders from Transfer logs`)
+      const built = await chain.balances(c.token, {
+        startBlock: c.chainStartBlock ?? undefined,
+        maxCalls: c.chainMaxCalls,
+      })
+      if (built.partial) {
+        throw new Error(
+          `chain scan incomplete (scanned to block ${built.scannedTo}) — set TOKEN_START_BLOCK to the token's first block, or raise CHAIN_MAX_CALLS`
+        )
+      }
+      const contracts = await chain.contractsAmong(
+        // only the addresses big enough to be pools need the code check
+        [...built.map.entries()]
+          .filter(([, v]) => tokenTotalSupply > 0n && v * 10000n / tokenTotalSupply >= BigInt(Math.round(c.poolMinPct * 100)))
+          .map(([a]) => a)
+      )
+      holdersSource = 'rpc-transfer-logs'
+      return { map: built.map, contracts }
+    }
+
+    throw new Error(`no holder source available — ${tried.join(' · ')}`)
+  }
 
   /** A stand-in holder set for building the UI before a real token exists. */
   function demoHolders() {
@@ -177,34 +340,195 @@ export function createDistributor({ onEvent, db }) {
     }
     try {
       if (tokenTotalSupply === 0n) await loadTokenMeta()
-      let res
-      try {
-        res = await crawlHolders(c.blockscout, true)
-      } catch (e) {
-        if (c.blockscoutPublic && c.blockscoutPublic !== c.blockscout) {
-          console.warn(`[airdrop] holders crawl failed (${e.message}) — retrying via public instance`)
-          res = await crawlHolders(c.blockscoutPublic, false)
-        } else throw e
-      }
+      const res = await fetchHolders()
       contractHolders = res.contracts
+      await refreshRpcPools()
+      refreshPools(res.map)
 
       const supply = fmtUnits(tokenTotalSupply, tokenDecimals)
+      holdersSupply = supply
+      let crawled = 0n
+      let inPools = 0n
       const rows = []
       for (const [address, raw] of res.map) {
+        crawled += raw
+        if (poolSet.has(address)) inPools += raw
         if (raw <= 0n || isExcluded(address)) continue
         const amount = fmtUnits(raw, tokenDecimals)
         const pct = supply > 0 ? (amount / supply) * 100 : 0
         if (pct < c.minPct || pct > c.maxPct) continue
         rows.push({ address, raw, amount, pct })
       }
-      rows.sort((a, b) => b.amount - a.amount)
-      rows.forEach((r, i) => (r.rank = i + 1))
-      holders = { ts: now(), rows, supply, total: res.map.size }
+
+      // A crawl that only saw a sliver of the supply is a TRUNCATED crawl, not
+      // a token with a tiny float. Paying over it would hand the whole airdrop
+      // to whichever addresses happened to land on the first page.
+      const coverage = tokenTotalSupply > 0n ? Number((crawled * 10000n) / tokenTotalSupply) / 100 : 0
+      if (coverage < c.minSupplyCoverage) {
+        diagnostics = { ts: now(), token: c.token, coveragePct: coverage, rejected: 'crawl covers too little of the supply' }
+        console.warn(
+          `[airdrop] crawl covers only ${coverage.toFixed(1)}% of supply (need ${c.minSupplyCoverage}%) — snapshot rejected`
+        )
+        return
+      }
+
+      await verifyBalances(rows)
+      const live = rows.filter((r) => r.raw > 0n && r.pct >= c.minPct && r.pct <= c.maxPct)
+      live.sort((a, b) => b.amount - a.amount)
+      live.forEach((r, i) => (r.rank = i + 1))
+
+      // A collapse in the holder count is an indexer problem far more often
+      // than a real exodus, and paying over it silently concentrates the
+      // airdrop into whichever addresses survived the bad crawl.
+      if (lastEligibleCount > 20 && live.length < lastEligibleCount * 0.3) {
+        diagnostics = { ts: now(), token: c.token, rejected: 'eligible holders collapsed vs the previous crawl', was: lastEligibleCount, now: live.length }
+        console.warn(
+          `[airdrop] eligible holders fell ${lastEligibleCount} -> ${live.length} — snapshot rejected as a likely bad crawl`
+        )
+        return
+      }
+      lastEligibleCount = live.length
+
+      holders = { ts: now(), rows: live, supply, total: res.map.size }
+      const poolPct = supply > 0 ? (fmtUnits(inPools, tokenDecimals) / supply) * 100 : 0
+      diagnostics = {
+        ts: now(),
+        token: c.token,
+        totalSupply: supply,
+        source: holdersSource,
+        addressesSeen: res.map.size,
+        coveragePct: coverage,
+        contractsFlagged: contractHolders.size,
+        heldByPoolsPct: poolPct,
+        pools: [...poolSet].map((a) => ({
+          address: a,
+          balance: fmtUnits(res.map.get(a) || 0n, tokenDecimals),
+          pctOfSupply: supply > 0 ? (fmtUnits(res.map.get(a) || 0n, tokenDecimals) / supply) * 100 : 0,
+          confirmedOnchain: rpcPools.has(a),
+          flaggedContract: contractHolders.has(a),
+        })),
+        eligible: live.length,
+        eligibleSupplyPct: live.reduce((a, r) => a + r.pct, 0),
+        top: live.slice(0, 10).map((r) => ({ address: r.address, amount: r.amount, pct: r.pct })),
+        settings: {
+          onchainVerified: c.verifyOnchain,
+          minEligiblePct: c.minPct,
+          maxHolderPct: c.maxPct,
+          poolMinPct: c.poolMinPct,
+          minSupplyCoverage: c.minSupplyCoverage,
+        },
+      }
       console.info(
-        `[airdrop] ${rows.length} eligible holders of ${c.token} (${res.contracts.size} contracts skipped)`
+        `[airdrop] via ${holdersSource}: ${live.length} eligible holders of ${c.token} · ${poolSet.size} pool/curve excluded ` +
+          `(${poolPct.toFixed(1)}% of supply) · crawl covered ${coverage.toFixed(1)}%`
       )
     } catch (e) {
       console.error('[airdrop] holders poll:', e.message)
+    }
+  }
+
+  /**
+   * Analyse ANY token's holders without touching the live snapshot — point it
+   * at a launchpad address and it reports what it found and, more importantly,
+   * WHY each address was excluded. Holder detection is the part of this that
+   * has gone wrong before; this is how you see it going wrong.
+   */
+  async function probe(tokenAddress) {
+    const token = String(tokenAddress || '').trim().toLowerCase()
+    if (!isAddr(token)) throw new Error('not an EVM address')
+
+    let decimals = 18
+    let supplyRaw = 0n
+    try {
+      const meta = await getJson(c.blockscout, `/api/v2/tokens/${token}`, bsAuth())
+      if (meta?.decimals != null) decimals = Number(meta.decimals)
+      if (meta?.total_supply != null) supplyRaw = BigInt(meta.total_supply)
+    } catch {}
+    if (supplyRaw === 0n && provider) {
+      const t = new ethers.Contract(token, ERC20_ABI, provider)
+      try { decimals = Number(await t.decimals()) } catch {}
+      try { supplyRaw = await t.totalSupply() } catch {}
+    }
+    if (supplyRaw === 0n) throw new Error('could not read total supply — wrong chain or wrong address?')
+
+    // crawl against whichever indexer answers
+    const saved = c.token
+    c.token = token
+    let res
+    try {
+      try {
+        res = await crawlHolders(c.blockscout, true)
+      } catch (e) {
+        res = await crawlHolders(c.blockscoutPublic, false)
+      }
+    } finally {
+      c.token = saved
+    }
+
+    const supply = fmtUnits(supplyRaw, decimals)
+    const minRaw = (supplyRaw * BigInt(Math.round(c.poolMinPct * 1000))) / 100_000n
+    const pools = new Set()
+    let biggest = null
+    let biggestBal = 0n
+    for (const a of res.contracts) {
+      const b = res.map.get(a) || 0n
+      if (b >= minRaw) pools.add(a)
+      if (b > biggestBal) { biggestBal = b; biggest = a }
+    }
+    if (biggest) pools.add(biggest)
+    if (provider) {
+      const t = new ethers.Contract(token, ERC20_ABI, provider)
+      for (const a of c.poolCandidates) {
+        try { if ((await t.balanceOf(a)) >= minRaw) pools.add(a) } catch {}
+      }
+    }
+
+    let crawled = 0n
+    const eligible = []
+    const excluded = []
+    for (const [address, raw] of res.map) {
+      crawled += raw
+      const amount = fmtUnits(raw, decimals)
+      const pct = supply > 0 ? (amount / supply) * 100 : 0
+      let why = null
+      if (raw <= 0n) why = 'zero balance'
+      else if (address === ZERO || address === DEAD) why = 'burn address'
+      else if (c.exclude.has(address)) why = 'on the exclude list'
+      else if (pools.has(address)) why = 'pool or bonding curve'
+      else if (c.excludeContracts && res.contracts.has(address)) why = 'contract'
+      else if (pct < c.minPct) why = `below ${c.minPct}% of supply`
+      else if (pct > c.maxPct) why = `above ${c.maxPct}% of supply`
+      if (why) excluded.push({ address, amount, pct, why })
+      else eligible.push({ address, amount, pct })
+    }
+    eligible.sort((a, b) => b.amount - a.amount)
+    excluded.sort((a, b) => b.amount - a.amount)
+
+    const coverage = supplyRaw > 0n ? Number((crawled * 10000n) / supplyRaw) / 100 : 0
+    return {
+      token,
+      decimals,
+      totalSupply: supply,
+      addressesSeen: res.map.size,
+      coveragePct: coverage,
+      coverageOk: coverage >= c.minSupplyCoverage,
+      contractsFlagged: res.contracts.size,
+      pools: [...pools].map((a) => ({
+        address: a,
+        amount: fmtUnits(res.map.get(a) || 0n, decimals),
+        pctOfSupply: supply > 0 ? (fmtUnits(res.map.get(a) || 0n, decimals) / supply) * 100 : 0,
+        known: c.poolCandidates.includes(a),
+        flaggedContract: res.contracts.has(a),
+      })),
+      eligible: { count: eligible.length, supplyPct: eligible.reduce((a, r) => a + r.pct, 0), top: eligible.slice(0, 25) },
+      excluded: { count: excluded.length, top: excluded.slice(0, 25) },
+      settings: {
+        poolMinPct: c.poolMinPct,
+        minEligiblePct: c.minPct,
+        maxHolderPct: c.maxPct,
+        minSupplyCoverage: c.minSupplyCoverage,
+        excludeContracts: c.excludeContracts,
+      },
     }
   }
 
@@ -478,10 +802,17 @@ export function createDistributor({ onEvent, db }) {
     onRoundWinner,
     get enabled() { return enabled },
     get dryRun() { return dryRun },
+    /** Everything needed to debug holder detection on a new launchpad token. */
+    diagnostics() {
+      return diagnostics || { ts: null, token: c.token || null, rejected: 'no crawl yet' }
+    },
+    refreshHolders: pollHolders,
+    probe,
     snapshot() {
       return {
         enabled,
         dryRun,
+        poolsExcluded: poolSet.size,
         token: c.token || null,
         explorer: c.explorer,
         eligibleHolders: holders?.rows?.length ?? 0,
