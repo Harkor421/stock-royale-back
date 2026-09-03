@@ -63,13 +63,23 @@ A mega-cap can print hundreds of times a second and no eye can read that. Ordina
 
 ## Deploy to Railway
 
-The server binds `process.env.PORT` and answers `GET /`, so it deploys as-is.
+It holds an open WebSocket to the feed and runs a round clock, so it needs a
+long-lived process — Vercel's serverless functions can't host it. The server
+binds `process.env.PORT` and answers `GET /`, so Railway deploys it as-is.
+
+**Live: `wss://stock-royale-back-production.up.railway.app`** — the Railway
+project `stock-royale` is connected to this repo, so a push to `master` ships it.
 
 1. New Project → Deploy from GitHub repo → `stock-royale-back`.
 2. Add the variable **`FINNHUB_API_KEY`**.
 3. Networking → generate a domain. Your WebSocket endpoint is `wss://<domain>`.
 
 Then point the frontend at it with `VITE_BACKEND_URL=wss://<domain>`.
+
+> The deployed instance is currently on **`SIM=1`** — a synthetic tape — because
+> it has no key yet. It reports `sim: true` in its `hello` snapshot and the
+> frontend puts a gold warning on screen. Set `FINNHUB_API_KEY` and drop `SIM`
+> to put it on the real market.
 
 ## Maintenance
 
