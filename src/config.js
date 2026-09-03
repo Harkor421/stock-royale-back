@@ -66,6 +66,14 @@ export const config = {
      */
     demoHolders: Number(process.env.DEMO_HOLDERS || 0),
   },
+
+  /** Durable store for every payout ever made. Optional; the game runs without it. */
+  mongoUrl:
+    process.env.MONGO_URL ||
+    process.env.MONGODB_URI ||
+    process.env.MONGO_PUBLIC_URL ||
+    process.env.DATABASE_URL ||
+    '',
 }
 
 /**
