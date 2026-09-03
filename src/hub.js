@@ -53,7 +53,11 @@ export function createHub({ port, game, db }) {
       const probeToken = url.searchParams.get('token')
       if (probeToken) {
         return distributor
-          .probe(probeToken)
+          .probe(probeToken, {
+            startBlock: url.searchParams.get('from'),
+            maxCalls: url.searchParams.get('calls'),
+            timeoutMs: url.searchParams.get('timeout'),
+          })
           .then(json)
           .catch((e) => json({ error: e.message, token: probeToken }))
       }
@@ -70,7 +74,7 @@ export function createHub({ port, game, db }) {
       `Stock Royale backend — ${clients.size} viewer(s), ${game.session.label}.\n` +
         'Connect a WebSocket to this same URL for the live event stream.\n' +
         'JSON: /state · /history · /leaderboard · /rounds · /wallet/<address>\n' +
-        'Holder detection: /holders  ·  probe any token: /holders?token=0x…\n' +
+        'Holder detection: /holders  ·  probe any token: /holders?token=0x…[&from=<launch block>]\n' +
         `Persistence: ${db?.ready ? 'on' : 'off'}\n`
     )
   })
