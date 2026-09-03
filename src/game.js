@@ -370,6 +370,10 @@ export function createGame({ onEvent }) {
         ts: Date.now(),
         id: nextId(),
         game: 'Stock Royale',
+        // The frontend MUST be able to tell a synthetic tape from the real one.
+        // A page showing made-up prices without saying so is a lie to whoever
+        // is watching it, so this flag rides on every snapshot.
+        sim: config.sim,
         roster,
         session,
         round: roundMeta(),
