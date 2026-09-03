@@ -9,9 +9,12 @@
     "dev": "node --watch src/index.js",
     "sim": "SIM=1 node src/index.js"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "dotenv": "^16.4.7",
+    "ethers": "^6.17.0",
     "ws": "^8.18.0"
   }
 }

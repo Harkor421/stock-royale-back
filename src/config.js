@@ -23,6 +23,49 @@ export const config = {
   windowSec: Number(process.env.WINDOW_SEC || 30),
   /** Winners kept in memory for the hall of fame. */
   historyLen: Number(process.env.HISTORY_LEN || 24),
+
+  /**
+   * The prize. When a round ends, the pot wallet buys the winning ticker's
+   * tokenized stock on Robinhood Chain and airdrops it to the holders of the
+   * game's memecoin. Off by default, and DRY_RUN on by default even when armed:
+   * nothing touches real funds until both switches are thrown deliberately.
+   */
+  chain: {
+    airdrop: process.env.AIRDROP === '1',
+    dryRun: String(process.env.DRY_RUN ?? 'true') === 'true',
+    rpcUrl: process.env.RPC_URL || 'https://rpc.mainnet.chain.robinhood.com',
+    chainId: Number(process.env.CHAIN_ID || 4663),
+    blockscout: (process.env.BLOCKSCOUT_URL || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
+    blockscoutPublic: (process.env.BLOCKSCOUT_PUBLIC || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
+    blockscoutKey: process.env.BLOCKSCOUT_API_KEY || '',
+    explorer: (process.env.EXPLORER_URL || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
+    /** The memecoin whose holders receive the winning stock. */
+    token: (process.env.TOKEN || '').trim().toLowerCase(),
+    privateKey: process.env.DISTRIBUTOR_PRIVATE_KEY || '',
+    weth: (process.env.WETH || '0x0bd7d308f8e1639fab988df18a8011f41eacad73').toLowerCase(),
+    router: (process.env.SWAP_ROUTER || '0xCb0615a1478838DeA20E57447309be97f45DcA0f').toLowerCase(),
+    poolDeployer: process.env.POOL_DEPLOYER || '0x0000000000000000000000000000000000000000',
+    buyPct: Number(process.env.BUY_PCT || 80),
+    slippagePct: Number(process.env.BUY_SLIPPAGE_PCT || 20), // thin Algebra pools
+    leaveWei: BigInt(Math.round(Number(process.env.LEAVE_ETH ?? 0.003) * 1e18)),
+    minPct: Number(process.env.MIN_ELIGIBLE_PCT || 0.1),
+    maxPct: Number(process.env.MAX_HOLDER_PCT || 50),
+    excludeContracts: String(process.env.EXCLUDE_CONTRACTS ?? 'true') === 'true',
+    exclude: new Set(
+      (process.env.EXCLUDE_ADDRESSES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
+    ),
+    payoutGas: BigInt(process.env.PAYOUT_GAS_LIMIT || 800_000),
+    sendDelayMs: Number(process.env.SEND_DELAY_MS || 250),
+    holdersPollMs: Number(process.env.HOLDERS_POLL_MS || 60_000),
+    holdersStaleMs: Number(process.env.HOLDERS_STALE_MS || 10 * 60_000),
+    /**
+     * Dev only: synthesize this many holders so the airdrop panel can be built
+     * and reviewed before a real memecoin exists. Every event it produces is
+     * stamped demo:true and the frontend labels it — it must never be mistaken
+     * for a payout that happened.
+     */
+    demoHolders: Number(process.env.DEMO_HOLDERS || 0),
+  },
 }
 
 /**
