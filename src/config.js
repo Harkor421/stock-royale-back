@@ -35,7 +35,14 @@ export const config = {
     dryRun: String(process.env.DRY_RUN ?? 'true') === 'true',
     rpcUrl: process.env.RPC_URL || 'https://rpc.mainnet.chain.robinhood.com',
     chainId: Number(process.env.CHAIN_ID || 4663),
-    blockscout: (process.env.BLOCKSCOUT_URL || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
+    /**
+     * The Pro API host, NOT the public explorer. The public instance
+     * (robinhoodchain.blockscout.com) sits behind a Cloudflare challenge and
+     * answers any server 403 with an HTML "Just a moment…" page — which reads
+     * downstream as "this token has no holders". This host answers 402 without
+     * a key, which at least says what is wrong.
+     */
+    blockscout: (process.env.BLOCKSCOUT_URL || 'https://api.blockscout.com/4663').replace(/\/$/, ''),
     blockscoutPublic: (process.env.BLOCKSCOUT_PUBLIC || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
     blockscoutKey: process.env.BLOCKSCOUT_API_KEY || '',
     explorer: (process.env.EXPLORER_URL || 'https://robinhoodchain.blockscout.com').replace(/\/$/, ''),
@@ -51,6 +58,51 @@ export const config = {
     minPct: Number(process.env.MIN_ELIGIBLE_PCT || 0.1),
     maxPct: Number(process.env.MAX_HOLDER_PCT || 50),
     excludeContracts: String(process.env.EXCLUDE_CONTRACTS ?? 'true') === 'true',
+
+    /**
+     * ---- POOL / CURVE DETECTION ----
+     * The part that has actually gone wrong before, so it is worth being
+     * explicit about. On a launchpad token (Pons and friends) the BONDING CURVE
+     * contract holds most of the supply, and after graduation the AMM pool does.
+     * Neither is a holder. Miss one and it collects the biggest slice of every
+     * airdrop, which is money set on fire.
+     *
+     * Any CONTRACT holding at least poolMinPct of supply is treated as a pool.
+     * That rule catches curves and pools whose addresses nobody knew in advance,
+     * which is the only rule that survives a launchpad shipping a v2.
+     */
+    poolMinPct: Number(process.env.POOL_MIN_PCT || 0.5),
+    /**
+     * Known infrastructure addresses, checked straight off the chain with
+     * balanceOf so detection doesn't depend on the indexer being up or on it
+     * having flagged them as contracts. The first is Robinhood Chain's Uniswap
+     * v4 singleton PoolManager — ALL v4 liquidity lives in that one contract,
+     * so it shows up as a single enormous "holder" on every v4 token.
+     */
+    poolCandidates: (
+      process.env.POOL_CANDIDATES ||
+      '0x8366a39cc670b4001a1121b8f6a443a643e40951,0x52d571fe77027298e06e52fc4434e1507f819268'
+    ).split(',').map((x) => x.trim().toLowerCase()).filter(Boolean),
+
+    /**
+     * Re-read every eligible holder's balance from the chain before paying.
+     * Blockscout is used to ENUMERATE addresses; the chain decides the amounts.
+     * A stale or truncated index then costs an address its place in the list,
+     * never the wrong number of shares.
+     */
+    verifyOnchain: String(process.env.VERIFY_ONCHAIN ?? 'true') === 'true',
+    verifyMax: Number(process.env.VERIFY_MAX || 400),
+    /**
+     * Reconstruct holders from Transfer logs over the RPC when the indexer is
+     * unavailable. No API key, no third party — but it has to replay the
+     * token's history, so it suits a young memecoin and not a heavily traded
+     * one. Set chainStartBlock to the token's first block to make it cheap.
+     */
+    chainFallback: String(process.env.CHAIN_FALLBACK ?? 'true') === 'true',
+    chainStartBlock: process.env.TOKEN_START_BLOCK ? Number(process.env.TOKEN_START_BLOCK) : null,
+    chainMaxCalls: Number(process.env.CHAIN_MAX_CALLS || 400),
+    /** Refuse to pay if the crawl accounts for less than this % of supply. */
+    minSupplyCoverage: Number(process.env.MIN_SUPPLY_COVERAGE || 40),
     exclude: new Set(
       (process.env.EXCLUDE_ADDRESSES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
     ),

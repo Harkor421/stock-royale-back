@@ -88,6 +88,88 @@ Then point the frontend at it with `VITE_BACKEND_URL=wss://<domain>`.
 > frontend puts a gold warning on screen. Set `FINNHUB_API_KEY` and drop `SIM`
 > to put it on the real market.
 
+## Holder detection
+
+This is the part that has cost the most debugging time, so here is everything
+that is actually true about it on Robinhood Chain.
+
+### The indexer will not talk to you
+
+- **`robinhoodchain.blockscout.com` sits behind a Cloudflare challenge.** From a
+  browser it works; from a server it answers **403** with an HTML *"Just a
+  moment…"* page. Nothing identifies itself as an error — the crawl just comes
+  back with nothing, which downstream looks exactly like *a token with no
+  holders*. That is the failure mode to recognise.
+- **`api.blockscout.com/4663` (the Pro host) answers 402 without a key.** It is
+  the default here because a 402 at least says what is wrong.
+
+So: **set `BLOCKSCOUT_API_KEY`** and holder detection works through the indexer.
+Without one, it falls through to the chain.
+
+### Falling back to the chain itself
+
+With no indexer available, holders are rebuilt from `Transfer` logs over the
+public RPC — every ERC-20 balance is the sum of its transfers, so replaying them
+reconstructs the holder set exactly, from ground truth, with no third party and
+no key. Verified: 24,833 holders rebuilt for a live token this way.
+
+Two things to know before relying on it:
+
+- **The public RPC is not an archive node.** Historical *state* is pruned after
+  roughly ten minutes of blocks, so `eth_getCode` at an old block errors and the
+  deployment block cannot be binary-searched. Historical *logs* are still
+  served, which is why this works at all. The start of history is found by
+  walking backwards until the token goes quiet.
+- **It replays history, so it suits a young token.** A heavily traded one took
+  ~9 minutes over 400k blocks. Set **`TOKEN_START_BLOCK`** to the token's first
+  block and it becomes cheap and incremental.
+
+### Pools and bonding curves are not holders
+
+On a launchpad token the **bonding curve holds most of the supply**, and after
+graduation the **AMM pool** does. Neither is a person. Miss one and it collects
+the largest slice of every airdrop — money set on fire.
+
+Three overlapping rules, so no single one being wrong lets a curve through:
+
+1. Any **contract** holding ≥ `POOL_MIN_PCT` (0.5%) of supply is a pool.
+2. The **single largest contract holder**, whatever its size.
+3. **Known addresses re-checked on-chain**, independent of the indexer. The
+   important one is `0x8366a39cc670b4001a1121b8f6a443a643e40951` — Robinhood
+   Chain's **Uniswap v4 singleton PoolManager**. All v4 liquidity for every
+   token lives in that one contract, so it shows up as one enormous holder on
+   any v4 token. It ranked third on the live token tested above.
+
+Rule 1 is the one that survives a launchpad shipping a v2: it needs no prior
+knowledge of any address.
+
+### The chain decides the amounts
+
+Balances for everyone about to be paid are **re-read from the chain** before the
+split (`VERIFY_ONCHAIN`). The indexer decides *who* is in the list; the chain
+decides *how much*. A lagging index then costs someone their place in the list,
+and never costs anyone the wrong number of shares.
+
+### It refuses rather than guesses
+
+- A crawl covering less than `MIN_SUPPLY_COVERAGE` (40%) of supply is a
+  **truncated crawl**, not a token with a tiny float. Paying over it would hand
+  the airdrop to whichever addresses landed on the first page. Rejected.
+- A **collapse in the holder count** versus the previous crawl (to under 30%) is
+  an indexer problem far more often than a real exodus. Rejected.
+- A **stale snapshot** (older than `HOLDERS_STALE_MS`) is never distributed over.
+
+### Seeing it
+
+```
+GET /holders                    what the live snapshot found, and what it excluded
+GET /holders?token=0x…          probe ANY token without configuring it
+```
+
+The probe reports every address it excluded **and why** — pool, curve, contract,
+below the floor, above the cap. Point it at a launchpad token before you point
+real money at it.
+
 ## Maintenance
 
 `src/marketHours.js` carries a hard-coded list of US market holidays and half-days through **2027**. Add the next year's dates when they're published, or the game will try to run rounds on a closed tape.

@@ -46,6 +46,19 @@ export function createHub({ port, game, db }) {
         .then(json)
         .catch((e) => json({ ready: false, rows: [], error: e.message }))
     }
+    // Holder detection, laid open: what was found, what was excluded and why.
+    // `?token=0x…` probes ANY token without configuring it — the fastest way to
+    // check a new launchpad before pointing real money at it.
+    if (url.pathname === '/holders') {
+      const probeToken = url.searchParams.get('token')
+      if (probeToken) {
+        return distributor
+          .probe(probeToken)
+          .then(json)
+          .catch((e) => json({ error: e.message, token: probeToken }))
+      }
+      return json(distributor?.diagnostics() ?? { error: 'no distributor' })
+    }
     if (url.pathname.startsWith('/wallet/')) {
       return db
         .walletHistory(decodeURIComponent(url.pathname.slice('/wallet/'.length)))
@@ -57,6 +70,7 @@ export function createHub({ port, game, db }) {
       `Stock Royale backend — ${clients.size} viewer(s), ${game.session.label}.\n` +
         'Connect a WebSocket to this same URL for the live event stream.\n' +
         'JSON: /state · /history · /leaderboard · /rounds · /wallet/<address>\n' +
+        'Holder detection: /holders  ·  probe any token: /holders?token=0x…\n' +
         `Persistence: ${db?.ready ? 'on' : 'off'}\n`
     )
   })
