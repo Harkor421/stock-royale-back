@@ -16,7 +16,14 @@ npm install
 cp .env.example .env      # then put your key in it
 ```
 
-Get a free key at [finnhub.io/register](https://finnhub.io/register). `.env` is git-ignored — never commit it.
+Get a free key at [finnhub.io/register](https://finnhub.io/register) — email only, no card, and the key is on your dashboard the moment you sign up. `.env` is git-ignored — never commit it.
+
+> ⚠️ **One socket per key.** Finnhub's free plan allows a single live WebSocket
+> per API key. Start a second backend on the same key — local dev while the
+> deploy is running, say — and it kicks the first one off; both then reconnect
+> in a loop until Finnhub answers `429` and neither receives anything. The feed
+> backs off for minutes when it detects this, but the fix is to use `npm run
+> sim` for local work, or a second key.
 
 ```
 FINNHUB_API_KEY=your-key
