@@ -162,9 +162,15 @@ and never costs anyone the wrong number of shares.
 ### Seeing it
 
 ```
-GET /holders                    what the live snapshot found, and what it excluded
-GET /holders?token=0x…          probe ANY token without configuring it
+GET /holders                          what the live snapshot found, and what it excluded
+GET /holders?token=0x…                probe ANY token without configuring it
+GET /holders?token=0x…&from=53680000  …starting at the block it launched at
 ```
+
+`&from=` is the difference between a useful probe and a timeout on a busy
+token. With it the scan is bounded and fast; without it, finding the start of
+history can eat the whole budget — the answer then comes back marked
+`"partial": true`, which means every number in it is a floor and not a total.
 
 The probe reports every address it excluded **and why** — pool, curve, contract,
 below the floor, above the cap. Point it at a launchpad token before you point

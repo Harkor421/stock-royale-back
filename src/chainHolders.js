@@ -63,13 +63,15 @@ export function createChainHolders({ provider, chainId }) {
    * Transfer at all. A token that has been quiet for that long has no earlier
    * balances that still matter — and if it does, `startBlock` overrides this.
    */
-  async function findFirstActivity(token, head, { window = 20_000, quietWindows = 4, maxLookback = 20_000_000 } = {}) {
+  async function findFirstActivity(token, head, { window = 20_000, quietWindows = 4, maxLookback = 20_000_000, deadline = 0 } = {}) {
     let quiet = 0
     let cursor = head
     let earliest = head
     let span = window
     const floor = Math.max(0, head - maxLookback)
     while (cursor > floor) {
+      // a diagnostic that never returns is not a diagnostic
+      if (deadline && Date.now() > deadline) return earliest
       const from = Math.max(floor, cursor - span + 1)
       let logs = null
       try {
@@ -114,6 +116,7 @@ export function createChainHolders({ provider, chainId }) {
     let span = maxSpan
     let calls = 0
     while (cursor <= to) {
+      if (opts.deadline && Date.now() > opts.deadline) return { cursor, calls, exhausted: true }
       const end = Math.min(cursor + span - 1, to)
       try {
         const logs = await provider.getLogs({
@@ -159,7 +162,12 @@ export function createChainHolders({ provider, chainId }) {
 
     if (!entry) {
       const startBlock =
-        opts.startBlock != null ? opts.startBlock : await findFirstActivity(token, head)
+        opts.startBlock != null
+          ? opts.startBlock
+          : await findFirstActivity(token, head, {
+              maxLookback: opts.maxLookback ?? 20_000_000,
+              deadline: opts.deadline ?? 0,
+            })
       entry = { balances: new Map(), cursor: startBlock, deployBlock: startBlock }
       cache.set(token, entry)
       onProgress?.({ phase: 'start-block', startBlock, blocksToScan: head - startBlock })
@@ -187,7 +195,7 @@ export function createChainHolders({ provider, chainId }) {
         add(from, -value)
         add(to, value)
       },
-      { maxCalls, onProgress }
+      { maxCalls, onProgress, deadline: opts.deadline ?? 0 }
     )
     entry.cursor = res.cursor
     return snapshot(entry, head, res.exhausted)

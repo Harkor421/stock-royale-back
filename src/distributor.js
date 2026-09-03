@@ -108,7 +108,7 @@ export function createDistributor({ onEvent, db }) {
    * and only applied whole: a crawl that dies half way is thrown away, never
    * distributed over, or the last page of holders would silently get nothing.
    */
-  async function crawlHolders(base, useAuth) {
+  async function crawlHolders(base, useAuth, token = c.token) {
     const map = new Map()
     const contracts = new Set()
     let params = useAuth ? { ...bsAuth() } : {}
@@ -116,7 +116,7 @@ export function createDistributor({ onEvent, db }) {
       let data = null
       for (let tries = 0; tries < 5; tries++) {
         try {
-          data = await getJson(base, `/api/v2/tokens/${c.token}/holders`, params)
+          data = await getJson(base, `/api/v2/tokens/${token}/holders`, params)
           break
         } catch (e) {
           if (tries === 4) throw e
@@ -257,7 +257,7 @@ export function createDistributor({ onEvent, db }) {
    * Every failure is reported with the reason, because the way this breaks is
    * by looking like a token with no holders.
    */
-  async function fetchHolders() {
+  async function fetchHolders(token = c.token, supplyRaw = tokenTotalSupply, budget = null) {
     const tried = []
     for (const [base, auth, label] of [
       [c.blockscout, true, 'blockscout-pro'],
@@ -265,10 +265,10 @@ export function createDistributor({ onEvent, db }) {
     ]) {
       if (!base) continue
       try {
-        const res = await crawlHolders(base, auth)
+        const res = await crawlHolders(base, auth, token)
         if (res.map.size) {
           holdersSource = label
-          return res
+          return { ...res, source: label }
         }
         tried.push(`${label}: returned no holders`)
       } catch (e) {
@@ -283,11 +283,14 @@ export function createDistributor({ onEvent, db }) {
 
     if (c.chainFallback && chain) {
       console.warn(`[airdrop] indexers unavailable (${tried.join(' · ')}) — rebuilding holders from Transfer logs`)
-      const built = await chain.balances(c.token, {
-        startBlock: c.chainStartBlock ?? undefined,
-        maxCalls: c.chainMaxCalls,
+      const built = await chain.balances(token, {
+        startBlock: budget?.startBlock ?? c.chainStartBlock ?? undefined,
+        maxCalls: budget?.maxCalls ?? c.chainMaxCalls,
+        maxLookback: budget?.lookback,
+        deadline: budget?.deadline,
       })
-      if (built.partial) {
+      // A probe returns what it managed to see and says so; a payout must not.
+      if (built.partial && !budget) {
         throw new Error(
           `chain scan incomplete (scanned to block ${built.scannedTo}) — set TOKEN_START_BLOCK to the token's first block, or raise CHAIN_MAX_CALLS`
         )
@@ -295,11 +298,18 @@ export function createDistributor({ onEvent, db }) {
       const contracts = await chain.contractsAmong(
         // only the addresses big enough to be pools need the code check
         [...built.map.entries()]
-          .filter(([, v]) => tokenTotalSupply > 0n && v * 10000n / tokenTotalSupply >= BigInt(Math.round(c.poolMinPct * 100)))
+          .filter(([, v]) => supplyRaw > 0n && (v * 10000n) / supplyRaw >= BigInt(Math.round(c.poolMinPct * 100)))
           .map(([a]) => a)
       )
       holdersSource = 'rpc-transfer-logs'
-      return { map: built.map, contracts }
+      return {
+        map: built.map,
+        contracts,
+        source: 'rpc-transfer-logs',
+        partial: built.partial,
+        scannedFrom: built.deployBlock,
+        scannedTo: built.scannedTo,
+      }
     }
 
     throw new Error(`no holder source available — ${tried.join(' · ')}`)
@@ -433,7 +443,7 @@ export function createDistributor({ onEvent, db }) {
    * WHY each address was excluded. Holder detection is the part of this that
    * has gone wrong before; this is how you see it going wrong.
    */
-  async function probe(tokenAddress) {
+  async function probe(tokenAddress, opts = {}) {
     const token = String(tokenAddress || '').trim().toLowerCase()
     if (!isAddr(token)) throw new Error('not an EVM address')
 
@@ -451,19 +461,16 @@ export function createDistributor({ onEvent, db }) {
     }
     if (supplyRaw === 0n) throw new Error('could not read total supply — wrong chain or wrong address?')
 
-    // crawl against whichever indexer answers
-    const saved = c.token
-    c.token = token
-    let res
-    try {
-      try {
-        res = await crawlHolders(c.blockscout, true)
-      } catch (e) {
-        res = await crawlHolders(c.blockscoutPublic, false)
-      }
-    } finally {
-      c.token = saved
-    }
+    // whichever source can answer — indexer, or the chain itself
+    // `from` is the difference between a useful probe and a timeout on a busy
+    // token: given the block the token launched at, the scan is bounded and
+    // fast; without it, finding the start of history eats the whole budget.
+    const res = await fetchHolders(token, supplyRaw, {
+      maxCalls: Number(opts.maxCalls) || c.probeMaxCalls,
+      lookback: c.probeLookback,
+      startBlock: opts.startBlock != null ? Number(opts.startBlock) : undefined,
+      deadline: Date.now() + (Number(opts.timeoutMs) || c.probeTimeoutMs),
+    })
 
     const supply = fmtUnits(supplyRaw, decimals)
     const minRaw = (supplyRaw * BigInt(Math.round(c.poolMinPct * 1000))) / 100_000n
@@ -507,6 +514,15 @@ export function createDistributor({ onEvent, db }) {
     const coverage = supplyRaw > 0n ? Number((crawled * 10000n) / supplyRaw) / 100 : 0
     return {
       token,
+      source: res.source,
+      // a probe that ran out of budget saw only part of the history, and every
+      // number below is therefore a floor, not a total
+      partial: !!res.partial,
+      partialHint: res.partial
+        ? 'Only part of the history was scanned. Re-run with &from=<the block the token launched at> for a complete answer, or set BLOCKSCOUT_API_KEY to use the indexer.'
+        : null,
+      scannedFrom: res.scannedFrom ?? null,
+      scannedTo: res.scannedTo ?? null,
       decimals,
       totalSupply: supply,
       addressesSeen: res.map.size,

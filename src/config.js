@@ -101,6 +101,10 @@ export const config = {
     chainFallback: String(process.env.CHAIN_FALLBACK ?? 'true') === 'true',
     chainStartBlock: process.env.TOKEN_START_BLOCK ? Number(process.env.TOKEN_START_BLOCK) : null,
     chainMaxCalls: Number(process.env.CHAIN_MAX_CALLS || 400),
+    /** Budgets for the /holders?token= probe, which answers an HTTP request. */
+    probeMaxCalls: Number(process.env.PROBE_MAX_CALLS || 150),
+    probeLookback: Number(process.env.PROBE_LOOKBACK || 400_000), // ~11 hours of blocks
+    probeTimeoutMs: Number(process.env.PROBE_TIMEOUT_MS || 45_000),
     /** Refuse to pay if the crawl accounts for less than this % of supply. */
     minSupplyCoverage: Number(process.env.MIN_SUPPLY_COVERAGE || 40),
     exclude: new Set(
