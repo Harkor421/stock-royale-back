@@ -390,7 +390,11 @@ export function createDistributor({ onEvent, db }) {
       }
 
       await verifyBalances(rows)
-      const live = rows.filter((r) => r.raw > 0n && r.pct >= c.minPct && r.pct <= c.maxPct)
+      const onlyWallets = await keepOnlyWallets(rows)
+      if (onlyWallets.removed.length) {
+        console.info(`[airdrop] ${onlyWallets.removed.length} contract(s) dropped from the payout list`)
+      }
+      const live = onlyWallets.rows.filter((r) => r.raw > 0n && r.pct >= c.minPct && r.pct <= c.maxPct)
       live.sort((a, b) => b.amount - a.amount)
       live.forEach((r, i) => (r.rank = i + 1))
 
@@ -442,6 +446,29 @@ export function createDistributor({ onEvent, db }) {
     } catch (e) {
       console.error('[airdrop] holders poll:', e.message)
     }
+  }
+
+  /**
+   * Every address about to be paid gets eth_getCode run on it.
+   *
+   * The pool rules catch infrastructure by SIZE — a contract sitting on a big
+   * share of supply. That leaves a gap: a router, a vault, a bridge or a
+   * multisig holding a modest share is not a pool by that rule and is not a
+   * person either. And on the indexer path the is_contract flag can simply be
+   * missing.
+   *
+   * So the last word on "is this a real wallet" comes from the chain, for every
+   * recipient, not just the big ones. It costs one call per address on a list
+   * that is usually small, and it is the difference between paying people and
+   * paying contracts.
+   */
+  async function keepOnlyWallets(rows) {
+    if (!provider || !chain || !rows.length) return { rows, removed: [] }
+    const code = await chain.contractsAmong(rows.map((r) => r.address))
+    if (!code.size) return { rows, removed: [] }
+    const removed = rows.filter((r) => code.has(r.address))
+    for (const r of removed) r.why = 'contract (verified on-chain)'
+    return { rows: rows.filter((r) => !code.has(r.address)), removed }
   }
 
   /**
@@ -515,9 +542,14 @@ export function createDistributor({ onEvent, db }) {
       if (why) excluded.push({ address, amount, pct, why })
       else eligible.push({ address, amount, pct, raw })
     }
-    eligible.sort((a, b) => b.amount - a.amount)
+    // the chain has the last word on who is a person
+    const verified = await keepOnlyWallets(eligible)
+    for (const r of verified.removed) excluded.push(r)
+    const wallets = verified.rows
+
+    wallets.sort((a, b) => b.amount - a.amount)
     excluded.sort((a, b) => b.amount - a.amount)
-    eligible.forEach((r, i) => (r.rank = i + 1))
+    wallets.forEach((r, i) => (r.rank = i + 1))
 
     const coverage = supplyRaw > 0n ? Number((crawled * 10000n) / supplyRaw) / 100 : 0
     return {
@@ -545,11 +577,12 @@ export function createDistributor({ onEvent, db }) {
         flaggedContract: res.contracts.has(a),
       })),
       eligible: {
-        count: eligible.length,
-        supplyPct: eligible.reduce((a, r) => a + r.pct, 0),
-        top: eligible.slice(0, 25).map(({ raw, ...r }) => r),
+        count: wallets.length,
+        supplyPct: wallets.reduce((a, r) => a + r.pct, 0),
+        contractsRejected: verified.removed.length,
+        top: wallets.slice(0, 25).map(({ raw, ...r }) => r),
         // the full set, raw balances included, is what a simulated split needs
-        all: opts.full ? eligible : undefined,
+        all: opts.full ? wallets : undefined,
       },
       excluded: { count: excluded.length, top: excluded.slice(0, 25) },
       settings: {
@@ -679,6 +712,8 @@ export function createDistributor({ onEvent, db }) {
         ticker,
         shares,
         recipients: items.length,
+        contractsRejected: scan.eligible.contractsRejected ?? 0,
+        allVerifiedEoa: true,
         roundedToDust: dust,
         heldBetweenThem: `${scan.eligible.supplyPct.toFixed(2)}% of supply`,
         biggestCut: items[0] ? `${items[0].shareOfDrop.toFixed(2)}% of the airdrop` : null,
