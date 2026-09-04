@@ -55,6 +55,9 @@ export const config = {
     buyPct: Number(process.env.BUY_PCT || 80),
     slippagePct: Number(process.env.BUY_SLIPPAGE_PCT || 20), // thin Algebra pools
     leaveWei: BigInt(Math.round(Number(process.env.LEAVE_ETH ?? 0.003) * 1e18)),
+    /** Override the ETH price instead of asking CoinGecko (mostly for testing). */
+    ethUsdOverride: process.env.ETH_USD ? Number(process.env.ETH_USD) : null,
+    potPollMs: Number(process.env.POT_POLL_MS || 45_000),
     minPct: Number(process.env.MIN_ELIGIBLE_PCT || 0.1),
     maxPct: Number(process.env.MAX_HOLDER_PCT || 50),
     excludeContracts: String(process.env.EXCLUDE_CONTRACTS ?? 'true') === 'true',

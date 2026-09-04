@@ -29,7 +29,7 @@ export function createHub({ port, game, db }) {
       res.end(JSON.stringify(body))
     }
     if (url.pathname === '/state') {
-      return json({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null })
+      return json({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null, pot: distributor?.potSnapshot() ?? null })
     }
     if (url.pathname === '/history') return json({ history: game.history })
 
@@ -103,7 +103,7 @@ export function createHub({ port, game, db }) {
   wss.on('connection', (client) => {
     clients.add(client)
     try {
-      client.send(JSON.stringify({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null }))
+      client.send(JSON.stringify({ ...game.snapshot(), airdrop: distributor?.snapshot() ?? null, pot: distributor?.potSnapshot() ?? null }))
     } catch {}
     client.on('message', (raw) => {
       let msg
