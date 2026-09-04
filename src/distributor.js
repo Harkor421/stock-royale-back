@@ -76,6 +76,7 @@ export function createDistributor({ onEvent, db }) {
   let wethApproved = false
   let busy = false
   let holdersTimer = null
+  let potTimer = null
 
   const emit = (e) => onEvent({ ...e, ts: e.ts ?? now() })
   const bsAuth = () => (c.blockscoutKey ? { apikey: c.blockscoutKey } : {})
@@ -736,6 +737,67 @@ export function createDistributor({ onEvent, db }) {
 
   const fakeHash = () => `0xSIM${now().toString(16)}${Math.random().toString(16).slice(2, 10)}`
 
+  // ---------------------------------------------------------------- the pot
+  // What the game has to give away, in dollars. Everything downstream of this
+  // is a number people are watching to decide whether to hold the coin, so it
+  // is published continuously rather than only at the bell.
+  let ethUsd = null
+  let ethUsdAt = 0
+  let pot = null
+
+  async function fetchEthUsd() {
+    if (c.ethUsdOverride) return c.ethUsdOverride
+    if (ethUsd != null && now() - ethUsdAt < 10 * 60_000) return ethUsd
+    try {
+      const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', {
+        headers: HTTP_HEADERS,
+        signal: AbortSignal.timeout(9000),
+      })
+      const j = await r.json()
+      const p = Number(j?.ethereum?.usd)
+      if (p > 0) {
+        ethUsd = p
+        ethUsdAt = now()
+      }
+    } catch {
+      /* keep the last good price; a stale ETH quote is better than a blank pot */
+    }
+    return ethUsd
+  }
+
+  async function pollPot() {
+    if (!provider || !wallet) {
+      // With no wallet configured there is no pot. Say so rather than showing
+      // a zero, which would read as "the pot is empty" instead of "unset".
+      pot = { ready: false, reason: wallet ? 'no rpc' : 'no distributor wallet configured' }
+      emit({ type: 'pot', ts: now(), ...pot })
+      return
+    }
+    try {
+      const [balWei, px] = await Promise.all([provider.getBalance(wallet.address), fetchEthUsd()])
+      const spendable = balWei > c.leaveWei ? balWei - c.leaveWei : 0n
+      const budget = (spendable * BigInt(Math.round(c.buyPct))) / 100n
+      const eth = Number(fmtUnits(balWei, 18))
+      const nextEth = Number(fmtUnits(budget, 18))
+      pot = {
+        ready: true,
+        address: wallet.address,
+        addrUrl: explorerAddr(wallet.address),
+        eth,
+        ethUsd: px ?? null,
+        usd: px ? eth * px : null,
+        nextDropEth: nextEth,
+        nextDropUsd: px ? nextEth * px : null,
+        buyPct: c.buyPct,
+        gasReserveEth: Number(fmtUnits(c.leaveWei, 18)),
+        dryRun,
+      }
+      emit({ type: 'pot', ts: now(), ...pot })
+    } catch (e) {
+      console.warn('[airdrop] pot:', e.message)
+    }
+  }
+
   /** Swap BUY_PCT% of the pot's spendable ETH into the winner's stock. */
   async function buyStock(ticker, address) {
     const dec = await stockDec(address).catch(() => 18)
@@ -1001,6 +1063,7 @@ export function createDistributor({ onEvent, db }) {
     refreshHolders: pollHolders,
     probe,
     simulate,
+    potSnapshot: () => pot,
     snapshot() {
       return {
         enabled,
@@ -1015,8 +1078,18 @@ export function createDistributor({ onEvent, db }) {
       }
     },
     start() {
+      // The pot is published whenever there is a wallet to read, armed or not:
+      // you fund it, watch the number appear on screen, and only then flip
+      // AIRDROP on. Gating this behind `enabled` meant the pot stayed blank
+      // right up until the moment it started spending itself.
+      if (wallet) {
+        pollPot()
+        potTimer = setInterval(pollPot, c.potPollMs)
+      }
       if (!enabled) {
-        console.info('[airdrop] disabled (set AIRDROP=1 to arm it)')
+        console.info(
+          `[airdrop] disabled (set AIRDROP=1 to arm it)${wallet ? ' — pot balance still being published' : ''}`
+        )
         return
       }
       console.info(
@@ -1028,6 +1101,7 @@ export function createDistributor({ onEvent, db }) {
     },
     stop() {
       clearInterval(holdersTimer)
+      clearInterval(potTimer)
     },
   }
 }
