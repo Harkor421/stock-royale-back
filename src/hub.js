@@ -20,7 +20,12 @@ export function createHub({ port, game, db }) {
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://localhost')
+    // The slow reads (/holders?token=, /simulate) can outlast the edge proxy's
+    // timeout. When that happens the socket is already gone by the time the
+    // promise settles, and writing to it threw ERR_HTTP_HEADERS_SENT — which
+    // then fired the .catch, which wrote again. One guard covers both.
     const json = (body) => {
+      if (res.headersSent || res.writableEnded) return
       res.writeHead(200, {
         'content-type': 'application/json',
         'cache-control': 'no-store',
