@@ -66,6 +66,7 @@ export function createDistributor({ onEvent, db }) {
 
   const stockDecimals = new Map()
   let tokenDecimals = 18
+  let tokenSymbol = null
   let tokenTotalSupply = 0n
   let holders = null // { ts, rows:[{address, raw, amount, pct}] }
   let contractHolders = new Set()
@@ -142,13 +143,18 @@ export function createDistributor({ onEvent, db }) {
     try {
       const d = await getJson(c.blockscout, `/api/v2/tokens/${c.token}`, bsAuth())
       if (d?.decimals != null) tokenDecimals = Number(d.decimals)
+      if (d?.symbol) tokenSymbol = d.symbol
       if (d?.total_supply != null) tokenTotalSupply = BigInt(d.total_supply)
-      if (tokenTotalSupply > 0n) return
+      if (tokenTotalSupply > 0n && tokenSymbol) return
     } catch {}
     if (!provider) return
     const t = new ethers.Contract(c.token, ERC20_ABI, provider)
     try { tokenDecimals = Number(await t.decimals()) } catch {}
     try { tokenTotalSupply = await t.totalSupply() } catch {}
+    // The UI names the coin everywhere it explains the airdrop. Read the symbol
+    // off the contract rather than hard-coding it, so the copy can't outlive a
+    // change of token.
+    try { tokenSymbol = await t.symbol() } catch {}
   }
 
   /**
@@ -996,6 +1002,7 @@ export function createDistributor({ onEvent, db }) {
         demo: !!holders?.demo,
         explorer: c.explorer,
         token: c.token,
+        tokenSymbol,
       })
 
       const buy = await buyStock(winner.symbol, address)
@@ -1070,6 +1077,7 @@ export function createDistributor({ onEvent, db }) {
         dryRun,
         poolsExcluded: poolSet.size,
         token: c.token || null,
+        tokenSymbol,
         explorer: c.explorer,
         eligibleHolders: holders?.rows?.length ?? 0,
         demo: !!holders?.demo,
@@ -1087,6 +1095,7 @@ export function createDistributor({ onEvent, db }) {
         potTimer = setInterval(pollPot, c.potPollMs)
       }
       if (!enabled) {
+        if (isAddr(c.token)) loadTokenMeta()
         console.info(
           `[airdrop] disabled (set AIRDROP=1 to arm it)${wallet ? ' — pot balance still being published' : ''}`
         )
