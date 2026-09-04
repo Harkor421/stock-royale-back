@@ -108,21 +108,28 @@ Without one, it falls through to the chain.
 
 ### Falling back to the chain itself
 
-With no indexer available, holders are rebuilt from `Transfer` logs over the
-public RPC — every ERC-20 balance is the sum of its transfers, so replaying them
-reconstructs the holder set exactly, from ground truth, with no third party and
-no key. Verified: 24,833 holders rebuilt for a live token this way.
+With no indexer available, holders are read from the chain directly — no key, no
+third party.
 
-Two things to know before relying on it:
+**`balanceOf` already returns the state of the world right now.** History is
+only needed to learn *which* addresses to ask about. So the log scan is demoted
+to discovery: it walks backwards just far enough to have found the addresses
+holding the supply, and every balance comes from the chain. A wallet that has
+held since day one but traded once this morning is found in the first window
+with its **full** balance.
+
+That is why this converges in seconds no matter how old the coin is. Measured on
+a live 2-day-old token: **6.3s to 100% of supply**, against 32s for replaying
+every transfer, with identical results.
 
 - **The public RPC is not an archive node.** Historical *state* is pruned after
   roughly ten minutes of blocks, so `eth_getCode` at an old block errors and the
   deployment block cannot be binary-searched. Historical *logs* are still
-  served, which is why this works at all. The start of history is found by
-  walking backwards until the token goes quiet.
-- **It replays history, so it suits a young token.** A heavily traded one took
-  ~9 minutes over 400k blocks. Set **`TOKEN_START_BLOCK`** to the token's first
-  block and it becomes cheap and incremental.
+  served, which is why this works at all.
+- **Discovery does not stop early.** It runs until `DISCOVERY_TARGET` (99.5%) of
+  supply is accounted for. Unaccounted supply is not noise — it is wallets
+  nobody has looked at yet, and any one of them can be larger than everything
+  found so far. Stopping at 83% once hid the holder owed **89% of the airdrop**.
 
 ### Pools and bonding curves are not holders
 

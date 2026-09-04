@@ -63,7 +63,7 @@ export function createChainHolders({ provider, chainId }) {
    * Transfer at all. A token that has been quiet for that long has no earlier
    * balances that still matter — and if it does, `startBlock` overrides this.
    */
-  async function findFirstActivity(token, head, { window = 20_000, quietWindows = 4, maxLookback = 20_000_000, deadline = 0 } = {}) {
+  async function findFirstActivity(token, head, { window = 20_000, quietWindows = 6, maxLookback = 20_000_000, maxStep = 1_500_000, deadline = 0 } = {}) {
     let quiet = 0
     let cursor = head
     let earliest = head
@@ -94,10 +94,17 @@ export function createChainHolders({ provider, chainId }) {
       if (logs.length) {
         quiet = 0
         earliest = from
-        if (logs.length < 1500 && span < window) span = Math.min(window, span * 2)
+        // back to careful steps: we are inside the token's active history
+        span = Math.min(window, Math.max(window, span))
+        if (logs.length < 1500) span = window
       } else {
         quiet++
         if (quiet >= quietWindows) break
+        // Nothing here. A coin can be months old and silent for most of it, so
+        // reach back exponentially while it stays quiet — fixed steps would
+        // need thousands of calls to cross that. The step collapses back to
+        // `window` the moment a transfer shows up, so the start stays precise.
+        span = Math.min(maxStep, span * 3)
       }
       cursor = from - 1
     }
@@ -213,6 +220,113 @@ export function createChainHolders({ provider, chainId }) {
     }
   }
 
+  /**
+   * Current holders, WITHOUT replaying the token's history.
+   *
+   * The insight the first version missed: balanceOf already returns the state
+   * of the world right now. History is only needed to learn WHICH addresses to
+   * ask about. So the log scan is demoted to discovery — it walks back just far
+   * enough to have found the addresses that hold the supply — and every balance
+   * comes from the chain directly.
+   *
+   * That converges far faster, because a wallet that has held since day one but
+   * traded once this morning is found in the first window with its FULL balance.
+   * Replaying deltas would have credited it only what moved inside the window,
+   * and would have had to reach all the way back to get the rest.
+   *
+   * It stops as soon as the addresses found account for `targetCoverage` of
+   * supply — usually a handful of windows, whatever the token's age.
+   */
+  async function currentBalances(token, opts = {}) {
+    const {
+      totalSupply,
+      targetCoverage = 0.97,
+      window = 60_000,
+      maxWindows = 22,
+      maxStep = 2_000_000,
+      deadline = 0,
+      onProgress,
+    } = opts
+    if (!totalSupply || totalSupply <= 0n) throw new Error('need the token total supply to know when to stop')
+
+    const head = await provider.getBlockNumber()
+    const seen = new Set()
+    const balances = new Map()
+    const erc20 = new ethers.Contract(token, ['function balanceOf(address) view returns (uint256)'], provider)
+
+    let held = 0n
+    let cursor = head
+    let span = window
+    let windows = 0
+    let coverage = 0
+
+    const askChain = async (addrs) => {
+      const CONC = 10
+      for (let i = 0; i < addrs.length; i += CONC) {
+        await Promise.all(
+          addrs.slice(i, i + CONC).map(async (a) => {
+            try {
+              const b = await erc20.balanceOf(a)
+              if (b > 0n) {
+                if (!balances.has(a)) held += b
+                balances.set(a, b)
+              }
+            } catch {}
+          })
+        )
+      }
+    }
+
+    while (windows < maxWindows && cursor > 0) {
+      if (deadline && Date.now() > deadline) break
+      const from = Math.max(0, cursor - span + 1)
+      let logs = null
+      try {
+        logs = await provider.getLogs({ address: token, topics: [TRANSFER_TOPIC], fromBlock: from, toBlock: cursor })
+      } catch {
+        if (span > 500) {
+          span = Math.floor(span / 2)
+          continue
+        }
+        cursor = from - 1
+        continue
+      }
+
+      const fresh = []
+      for (const l of logs) {
+        for (const t of [l.topics[1], l.topics[2]]) {
+          if (!t) continue
+          const a = ('0x' + t.slice(26)).toLowerCase()
+          if (a === ethers.ZeroAddress) continue
+          if (!seen.has(a)) {
+            seen.add(a)
+            fresh.push(a)
+          }
+        }
+      }
+      if (fresh.length) await askChain(fresh)
+
+      coverage = Number((held * 10000n) / totalSupply) / 100
+      onProgress?.({ windows: windows + 1, from, addresses: seen.size, coveragePct: coverage })
+      if (coverage >= targetCoverage * 100) break
+
+      cursor = from - 1
+      // quiet stretch: reach back harder. busy stretch: keep steps careful.
+      span = logs.length ? window : Math.min(maxStep, span * 3)
+      windows++
+    }
+
+    return {
+      map: balances,
+      head,
+      scannedFrom: cursor,
+      scannedTo: head,
+      coveragePct: coverage,
+      complete: coverage >= targetCoverage * 100,
+      addressesConsidered: seen.size,
+    }
+  }
+
   /** Which of these addresses are contracts? Used to spot pools and curves. */
   async function contractsAmong(addresses) {
     const out = new Set()
@@ -230,5 +344,5 @@ export function createChainHolders({ provider, chainId }) {
     return out
   }
 
-  return { balances, contractsAmong, findDeployBlock, findFirstActivity, reset: () => cache.clear(), chainId }
+  return { balances, currentBalances, contractsAmong, findDeployBlock, findFirstActivity, reset: () => cache.clear(), chainId }
 }
