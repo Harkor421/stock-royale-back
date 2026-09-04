@@ -244,6 +244,7 @@ export function createChainHolders({ provider, chainId }) {
       window = 60_000,
       maxWindows = 22,
       maxStep = 2_000_000,
+      quietToStop = 3,
       deadline = 0,
       onProgress,
     } = opts
@@ -259,7 +260,9 @@ export function createChainHolders({ provider, chainId }) {
     let span = window
     let windows = 0
     let coverage = 0
+    let quietWindows = 0
 
+    let found = 0
     const askChain = async (addrs) => {
       const CONC = 10
       for (let i = 0; i < addrs.length; i += CONC) {
@@ -268,7 +271,10 @@ export function createChainHolders({ provider, chainId }) {
             try {
               const b = await erc20.balanceOf(a)
               if (b > 0n) {
-                if (!balances.has(a)) held += b
+                if (!balances.has(a)) {
+                  held += b
+                  found++
+                }
                 balances.set(a, b)
               }
             } catch {}
@@ -292,6 +298,7 @@ export function createChainHolders({ provider, chainId }) {
         continue
       }
 
+      found = 0
       const fresh = []
       for (const l of logs) {
         for (const t of [l.topics[1], l.topics[2]]) {
@@ -307,8 +314,15 @@ export function createChainHolders({ provider, chainId }) {
       if (fresh.length) await askChain(fresh)
 
       coverage = Number((held * 10000n) / totalSupply) / 100
-      onProgress?.({ windows: windows + 1, from, addresses: seen.size, coveragePct: coverage })
-      if (coverage >= targetCoverage * 100) break
+      if (found) quietWindows = 0
+      else quietWindows++
+      onProgress?.({ windows: windows + 1, from, addresses: seen.size, holders: balances.size, coveragePct: coverage })
+
+      // Coverage alone is the wrong stopping rule. The last fraction of a
+      // percent is not noise — it is small holders, and each of them is a
+      // person owed a cut. So keep going until the supply is accounted for AND
+      // the search has stopped turning up anybody new.
+      if (coverage >= targetCoverage * 100 && quietWindows >= quietToStop) break
 
       cursor = from - 1
       // quiet stretch: reach back harder. busy stretch: keep steps careful.
@@ -322,7 +336,7 @@ export function createChainHolders({ provider, chainId }) {
       scannedFrom: cursor,
       scannedTo: head,
       coveragePct: coverage,
-      complete: coverage >= targetCoverage * 100,
+      complete: coverage >= targetCoverage * 100 && quietWindows >= quietToStop,
       addressesConsidered: seen.size,
     }
   }

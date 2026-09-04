@@ -150,6 +150,26 @@ Three overlapping rules, so no single one being wrong lets a curve through:
 Rule 1 is the one that survives a launchpad shipping a v2: it needs no prior
 knowledge of any address.
 
+### And then every recipient is checked individually
+
+The rules above catch infrastructure by **size**. That leaves a gap: a router, a
+vault, a bridge or a multisig holding a modest share is not a pool by that rule,
+and is not a person either. On the indexer path, `is_contract` can also simply
+be missing.
+
+So the last word comes from the chain: **`eth_getCode` is run on every address
+about to be paid**, not just the large ones. On a live token this rejected two
+contracts holding 0.275% and 0.236% — both under the pool threshold, both
+otherwise about to be paid as if they were people.
+
+### Discovery stops when it stops finding people
+
+Not when a coverage number is hit. The last fraction of a percent of supply is
+not noise — it is small holders, and each one is a person owed a cut. The search
+runs until the supply is accounted for **and** several windows have passed
+without turning anybody new up. Stopping on coverage alone dropped a wallet
+holding 0.325% that was owed 3.5% of the airdrop.
+
 ### The chain decides the amounts
 
 Balances for everyone about to be paid are **re-read from the chain** before the
