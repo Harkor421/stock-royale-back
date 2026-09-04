@@ -805,6 +805,53 @@ export function createDistributor({ onEvent, db }) {
     }
   }
 
+  // -------------------------------------------------------- can we buy it?
+  // Not every tokenized stock has a WETH pool on this router. GOOGL does not:
+  // its quote reverts with a bare require(false), while NVDA and AAPL get as
+  // far as "STF" — the router trying and failing to pull WETH it has not been
+  // given. That difference is the tell, and it is checkable without spending
+  // anything:
+  //
+  //   bare revert  -> no pool. This stock can never be bought.
+  //   STF / TRANSFER_FROM_FAILED / allowance -> the pool is there, the quote
+  //                                             just had no funds to work with.
+  //
+  // Probed once at startup so a round is never won by a stock we then discover
+  // we cannot buy, with the viewer left watching a spinner.
+  const buyable = new Map()
+
+  async function checkBuyable(ticker, address) {
+    if (!provider) return true
+    const iface = new ethers.Interface(ROUTER_ABI)
+    const probeFrom = wallet?.address || '0x0000000000000000000000000000000000000001'
+    const args = [
+      c.weth, address, c.poolDeployer, probeFrom,
+      Math.floor(now() / 1000) + 600, ethers.parseEther('0.01'), 0n, 0n,
+    ]
+    try {
+      await provider.call({ from: probeFrom, to: c.router, data: iface.encodeFunctionData('exactInputSingle', [args]) })
+      return true // it would have gone through
+    } catch (e) {
+      const msg = String(e?.shortMessage || e?.message || e)
+      // the router got as far as moving money: the pool exists
+      if (/STF|TRANSFER_FROM_FAILED|allowance|balance/i.test(msg)) return true
+      return false
+    }
+  }
+
+  async function probeBuyable() {
+    if (!provider) return
+    const results = await Promise.all(
+      Object.entries(STOCK_TOKENS).map(async ([t, a]) => [t, await checkBuyable(t, a)])
+    )
+    for (const [t, ok] of results) buyable.set(t, ok)
+    const no = results.filter(([, ok]) => !ok).map(([t]) => t)
+    console.info(
+      `[airdrop] buyable on this router: ${results.filter(([, ok]) => ok).map(([t]) => t).join(', ') || 'none'}` +
+        (no.length ? ` · NO POOL for ${no.join(', ')} — rounds won by those cannot be paid` : '')
+    )
+  }
+
   /** Swap BUY_PCT% of the pot's spendable ETH into the winner's stock. */
   async function buyStock(ticker, address) {
     const dec = await stockDec(address).catch(() => 18)
@@ -990,6 +1037,13 @@ export function createDistributor({ onEvent, db }) {
       console.warn(`[airdrop] no tokenized stock known for ${winner.symbol}`)
       return
     }
+    // Say so up front rather than opening the panel and reverting inside it.
+    if (buyable.get(winner.symbol) === false) {
+      const msg = `${winner.symbol} has no WETH pool on this router, so it cannot be bought. Nothing was spent.`
+      console.warn(`[airdrop] ${msg}`)
+      emit({ type: 'airdropError', ticker: winner.symbol, round, message: msg, noPool: true })
+      return
+    }
     busy = true
     try {
       emit({
@@ -1079,6 +1133,7 @@ export function createDistributor({ onEvent, db }) {
         poolsExcluded: poolSet.size,
         token: c.token || null,
         tokenSymbol,
+        buyable: Object.fromEntries(buyable),
         explorer: c.explorer,
         eligibleHolders: holders?.rows?.length ?? 0,
         demo: !!holders?.demo,
@@ -1106,6 +1161,7 @@ export function createDistributor({ onEvent, db }) {
         `[airdrop] armed${dryRun ? ' in DRY RUN — no funds move' : ''} · token ${c.token || '(unset)'} · ` +
           `pot ${wallet ? wallet.address : '(no key)'}`
       )
+      probeBuyable()
       pollHolders()
       holdersTimer = setInterval(pollHolders, c.holdersPollMs)
     },
