@@ -568,14 +568,26 @@ export function createDistributor({ onEvent, db }) {
    * It streams the same events a real distribution does, so the panel on screen
    * plays it exactly as it would play the real thing, marked as a simulation.
    */
-  async function simulate({ token, ticker = 'NVDA', shares = 100, startBlock, stream = true, maxCalls, timeoutMs } = {}) {
+  async function simulate({ token, ticker = 'NVDA', shares = 100, startBlock, hours, days, stream = true, maxCalls, timeoutMs } = {}) {
     if (!isAddr(token)) throw new Error('pass ?token=0x… — the coin whose holders should receive the airdrop')
     const dec = 18
     const t0 = now()
 
+    // Nobody knows their coin's launch block off the top of their head, but
+    // everybody knows roughly when it launched. Robinhood Chain runs at about
+    // ten blocks a second; rounding that down scans slightly further back than
+    // asked, which errs toward covering the whole history rather than missing
+    // the start of it.
+    let from = startBlock != null && startBlock !== '' ? Number(startBlock) : null
+    const window = Number(days) > 0 ? Number(days) * 24 : Number(hours) > 0 ? Number(hours) : 0
+    if (from == null && window > 0 && provider) {
+      const head = await provider.getBlockNumber()
+      from = Math.max(0, head - Math.ceil(window * 35_000))
+    }
+
     const scan = await probe(token, {
       full: true,
-      startBlock,
+      startBlock: from ?? undefined,
       maxCalls: Number(maxCalls) || Math.max(c.probeMaxCalls, 400),
       timeoutMs: Number(timeoutMs) || Math.max(c.probeTimeoutMs, 90_000),
     })
@@ -587,8 +599,9 @@ export function createDistributor({ onEvent, db }) {
     if (!scan.coverageOk || scan.partial) {
       throw new Error(
         `the scan only accounted for ${scan.coveragePct.toFixed(1)}% of supply (a payout needs ${c.minSupplyCoverage}%), ` +
-          `so this would rehearse the wrong recipients. Pass &from=<the block the coin launched at> to cover its whole ` +
-          `history, or set BLOCKSCOUT_API_KEY to read holders from the indexer instead.`
+          `so this would rehearse the wrong recipients. Say how far back to look with &days=7 (or &hours=12, or ` +
+          `&from=<launch block>) so the scan covers the coin's whole history, or set BLOCKSCOUT_API_KEY to read ` +
+          `holders from the indexer instead.`
       )
     }
 

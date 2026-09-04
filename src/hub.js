@@ -72,6 +72,8 @@ export function createHub({ port, game, db }) {
           ticker: (url.searchParams.get('ticker') || 'NVDA').toUpperCase(),
           shares: Number(url.searchParams.get('shares') || 100),
           startBlock: url.searchParams.get('from'),
+          hours: url.searchParams.get('hours'),
+          days: url.searchParams.get('days'),
           maxCalls: url.searchParams.get('calls'),
           timeoutMs: url.searchParams.get('timeout'),
           stream: url.searchParams.get('stream') !== '0',
@@ -91,7 +93,7 @@ export function createHub({ port, game, db }) {
         'Connect a WebSocket to this same URL for the live event stream.\n' +
         'JSON: /state · /history · /leaderboard · /rounds · /wallet/<address>\n' +
         'Holder detection: /holders  ·  probe any token: /holders?token=0x…[&from=<launch block>]\n' +
-        'Rehearse an airdrop: /simulate?token=0x…&ticker=NVDA&shares=100[&from=<launch block>]\n' +
+        'Rehearse an airdrop: /simulate?token=0x…&ticker=NVDA&shares=100&days=7\n' +
         `Persistence: ${db?.ready ? 'on' : 'off'}\n`
     )
   })
