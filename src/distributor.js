@@ -31,6 +31,7 @@ const DEAD = '0x000000000000000000000000000000000000dead'
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)',
   'function totalSupply() view returns (uint256)',
   'function transfer(address,uint256) returns (bool)',
   'function allowance(address,address) view returns (uint256)',
