@@ -506,10 +506,11 @@ export function createDistributor({ onEvent, db }) {
       else if (pct < c.minPct) why = `below ${c.minPct}% of supply`
       else if (pct > c.maxPct) why = `above ${c.maxPct}% of supply`
       if (why) excluded.push({ address, amount, pct, why })
-      else eligible.push({ address, amount, pct })
+      else eligible.push({ address, amount, pct, raw })
     }
     eligible.sort((a, b) => b.amount - a.amount)
     excluded.sort((a, b) => b.amount - a.amount)
+    eligible.forEach((r, i) => (r.rank = i + 1))
 
     const coverage = supplyRaw > 0n ? Number((crawled * 10000n) / supplyRaw) / 100 : 0
     return {
@@ -536,7 +537,13 @@ export function createDistributor({ onEvent, db }) {
         known: c.poolCandidates.includes(a),
         flaggedContract: res.contracts.has(a),
       })),
-      eligible: { count: eligible.length, supplyPct: eligible.reduce((a, r) => a + r.pct, 0), top: eligible.slice(0, 25) },
+      eligible: {
+        count: eligible.length,
+        supplyPct: eligible.reduce((a, r) => a + r.pct, 0),
+        top: eligible.slice(0, 25).map(({ raw, ...r }) => r),
+        // the full set, raw balances included, is what a simulated split needs
+        all: opts.full ? eligible : undefined,
+      },
       excluded: { count: excluded.length, top: excluded.slice(0, 25) },
       settings: {
         poolMinPct: c.poolMinPct,
@@ -545,6 +552,120 @@ export function createDistributor({ onEvent, db }) {
         minSupplyCoverage: c.minSupplyCoverage,
         excludeContracts: c.excludeContracts,
       },
+    }
+  }
+
+  /**
+   * A dress rehearsal of a whole round's airdrop, over the REAL holders of a
+   * real coin.
+   *
+   * This is not a mock. It runs the same holder detection, the same pool and
+   * bonding-curve exclusion, the same on-chain balance check and the same
+   * pro-rata split that a live payout runs — everything except the transfers.
+   * So what it prints is what would actually be sent, which is the only kind of
+   * rehearsal worth having before pointing money at a token.
+   *
+   * It streams the same events a real distribution does, so the panel on screen
+   * plays it exactly as it would play the real thing, marked as a simulation.
+   */
+  async function simulate({ token, ticker = 'NVDA', shares = 100, startBlock, stream = true, maxCalls, timeoutMs } = {}) {
+    if (!isAddr(token)) throw new Error('pass ?token=0x… — the coin whose holders should receive the airdrop')
+    const dec = 18
+    const t0 = now()
+
+    const scan = await probe(token, {
+      full: true,
+      startBlock,
+      maxCalls: Number(maxCalls) || Math.max(c.probeMaxCalls, 400),
+      timeoutMs: Number(timeoutMs) || Math.max(c.probeTimeoutMs, 90_000),
+    })
+
+    // A rehearsal over a partial view of the token is worse than no rehearsal:
+    // it produces a confident recipient list built from whoever happened to
+    // trade inside the scanned window. Hold it to the SAME coverage floor a
+    // live payout is held to, and say exactly how to fix it.
+    if (!scan.coverageOk || scan.partial) {
+      throw new Error(
+        `the scan only accounted for ${scan.coveragePct.toFixed(1)}% of supply (a payout needs ${c.minSupplyCoverage}%), ` +
+          `so this would rehearse the wrong recipients. Pass &from=<the block the coin launched at> to cover its whole ` +
+          `history, or set BLOCKSCOUT_API_KEY to read holders from the indexer instead.`
+      )
+    }
+
+    const rows = scan.eligible.all || []
+    if (!rows.length) throw new Error('nothing to distribute: no address clears the eligibility floor')
+
+    // Identical arithmetic to the live path: integer maths on raw balances, so
+    // the rehearsal cannot round differently from the real thing.
+    const potRaw = ethers.parseUnits(String(shares), dec)
+    const totalW = rows.reduce((a, r) => a + r.raw, 0n)
+    const payouts = rows
+      .map((r) => ({ ...r, raw_out: (potRaw * r.raw) / totalW }))
+      .filter((p) => p.raw_out > 0n)
+
+    const items = payouts.map((p) => ({
+      to: p.address,
+      rank: p.rank,
+      pct: p.pct, //            share of the coin's supply this wallet holds
+      held: p.amount, //        how many coins that is
+      shareOfDrop: Number((p.raw_out * 1000000n) / potRaw) / 10000, // % of the airdrop
+      amount: fmtUnits(p.raw_out, dec),
+      addrUrl: explorerAddr(p.address),
+    }))
+    const dust = rows.length - payouts.length
+
+    if (stream) {
+      emit({
+        type: 'airdropStart',
+        simulated: true,
+        ticker,
+        holders: items.length,
+        token,
+        ts: now(),
+      })
+      for (const it of items.slice(0, 400)) {
+        emit({ type: 'airdropPayment', simulated: true, ticker, ...it, tx: null, txUrl: null })
+        if (stream) await sleep(25)
+      }
+      emit({
+        type: 'airdropResult',
+        simulated: true,
+        ticker,
+        count: items.length,
+        totalSent: shares,
+        ts: now(),
+      })
+    }
+
+    return {
+      simulated: true,
+      note: 'Nothing was bought and nothing was sent. Same holder detection, same exclusions, same split as a live round.',
+      coin: {
+        token,
+        source: scan.source,
+        partial: scan.partial,
+        partialHint: scan.partialHint,
+        totalSupply: scan.totalSupply,
+        addressesSeen: scan.addressesSeen,
+        supplyCovered: scan.coveragePct,
+        blocksScanned: scan.scannedFrom != null ? `${scan.scannedFrom} → ${scan.scannedTo}` : null,
+      },
+      excludedFromDrop: {
+        poolsAndCurves: scan.pools,
+        otherCount: scan.excluded.count - scan.pools.length,
+        examples: scan.excluded.top.filter((e) => e.why !== 'pool or bonding curve').slice(0, 8),
+      },
+      distribution: {
+        ticker,
+        shares,
+        recipients: items.length,
+        roundedToDust: dust,
+        heldBetweenThem: `${scan.eligible.supplyPct.toFixed(2)}% of supply`,
+        biggestCut: items[0] ? `${items[0].shareOfDrop.toFixed(2)}% of the airdrop` : null,
+        smallestCut: items.length ? `${items[items.length - 1].shareOfDrop.toFixed(4)}% of the airdrop` : null,
+        recipientsList: items,
+      },
+      tookMs: now() - t0,
     }
   }
 
@@ -824,6 +945,7 @@ export function createDistributor({ onEvent, db }) {
     },
     refreshHolders: pollHolders,
     probe,
+    simulate,
     snapshot() {
       return {
         enabled,

@@ -176,6 +176,36 @@ The probe reports every address it excluded **and why** — pool, curve, contrac
 below the floor, above the cap. Point it at a launchpad token before you point
 real money at it.
 
+## Rehearsing an airdrop
+
+Before pointing real money at a coin, run the whole round against its **real
+holders** without moving anything:
+
+```
+GET /simulate?token=0x…&ticker=NVDA&shares=100[&from=<launch block>]
+```
+
+It is not a mock. It runs the same holder detection, the same pool and
+bonding-curve exclusion, the same on-chain balance check and the same
+integer pro-rata split as a live payout — everything except the transfers. What
+it prints is what would actually be sent. It also streams the same events a real
+distribution does, so the panel on screen plays it exactly as it would play the
+real thing, labelled as a simulation.
+
+It answers three questions:
+
+| | |
+| --- | --- |
+| **Who holds the coin** | every address, what share of supply it holds, and which ones were dropped — pool, curve, contract, below the floor, above the cap |
+| **Who would be paid** | the recipient list, each wallet's share of supply and its exact cut |
+| **What it would cost them** | the largest and smallest cut, and how many cuts round away to dust |
+
+**It refuses over a partial view.** A rehearsal built from whoever happened to
+trade inside the scanned window is a confident wrong answer, so it is held to
+the same `MIN_SUPPLY_COVERAGE` floor a live payout is held to. If the scan can't
+reach it, pass `&from=<the block the coin launched at>` or set
+`BLOCKSCOUT_API_KEY`.
+
 ## Maintenance
 
 `src/marketHours.js` carries a hard-coded list of US market holidays and half-days through **2027**. Add the next year's dates when they're published, or the game will try to run rounds on a closed tape.

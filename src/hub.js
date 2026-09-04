@@ -63,6 +63,22 @@ export function createHub({ port, game, db }) {
       }
       return json(distributor?.diagnostics() ?? { error: 'no distributor' })
     }
+    // A full dress rehearsal over a real coin's real holders. Same detection,
+    // same exclusions, same split as a live round — no transfers.
+    if (url.pathname === '/simulate') {
+      return distributor
+        .simulate({
+          token: url.searchParams.get('token'),
+          ticker: (url.searchParams.get('ticker') || 'NVDA').toUpperCase(),
+          shares: Number(url.searchParams.get('shares') || 100),
+          startBlock: url.searchParams.get('from'),
+          maxCalls: url.searchParams.get('calls'),
+          timeoutMs: url.searchParams.get('timeout'),
+          stream: url.searchParams.get('stream') !== '0',
+        })
+        .then(json)
+        .catch((e) => json({ error: e.message, simulated: true }))
+    }
     if (url.pathname.startsWith('/wallet/')) {
       return db
         .walletHistory(decodeURIComponent(url.pathname.slice('/wallet/'.length)))
@@ -75,6 +91,7 @@ export function createHub({ port, game, db }) {
         'Connect a WebSocket to this same URL for the live event stream.\n' +
         'JSON: /state · /history · /leaderboard · /rounds · /wallet/<address>\n' +
         'Holder detection: /holders  ·  probe any token: /holders?token=0x…[&from=<launch block>]\n' +
+        'Rehearse an airdrop: /simulate?token=0x…&ticker=NVDA&shares=100[&from=<launch block>]\n' +
         `Persistence: ${db?.ready ? 'on' : 'off'}\n`
     )
   })
