@@ -54,7 +54,13 @@ export const config = {
     poolDeployer: process.env.POOL_DEPLOYER || '0x0000000000000000000000000000000000000000',
     buyPct: Number(process.env.BUY_PCT || 80),
     slippagePct: Number(process.env.BUY_SLIPPAGE_PCT || 20), // thin Algebra pools
-    leaveWei: BigInt(Math.round(Number(process.env.LEAVE_ETH ?? 0.003) * 1e18)),
+    /**
+     * Native ETH held back for gas. Measured on this chain: an ERC-20 transfer
+     * really costs 52k-78k gas at ~1 gwei, so a payout to ~25 wallets plus the
+     * wrap, approve and swap is a few dollars — not the tens the 200k fallback
+     * estimate suggested. Sized from that, not from the guess.
+     */
+    leaveWei: BigInt(Math.round(Number(process.env.LEAVE_ETH ?? 0.002) * 1e18)),
     /** Override the ETH price instead of asking CoinGecko (mostly for testing). */
     ethUsdOverride: process.env.ETH_USD ? Number(process.env.ETH_USD) : null,
     potPollMs: Number(process.env.POT_POLL_MS || 45_000),
@@ -122,7 +128,7 @@ export const config = {
     exclude: new Set(
       (process.env.EXCLUDE_ADDRESSES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
     ),
-    payoutGas: BigInt(process.env.PAYOUT_GAS_LIMIT || 800_000),
+    payoutGas: BigInt(process.env.PAYOUT_GAS_LIMIT || 250_000),
     sendDelayMs: Number(process.env.SEND_DELAY_MS || 250),
     holdersPollMs: Number(process.env.HOLDERS_POLL_MS || 60_000),
     holdersStaleMs: Number(process.env.HOLDERS_STALE_MS || 10 * 60_000),
