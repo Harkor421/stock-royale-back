@@ -107,6 +107,15 @@ export const config = {
     probeTimeoutMs: Number(process.env.PROBE_TIMEOUT_MS || 45_000),
     /** Refuse to pay if the crawl accounts for less than this % of supply. */
     minSupplyCoverage: Number(process.env.MIN_SUPPLY_COVERAGE || 40),
+    /**
+     * How much of the supply must be ACCOUNTED FOR before the holder search is
+     * allowed to stop. This is not the same number as minSupplyCoverage and it
+     * has to be high: unaccounted supply is not "a bit of noise", it is supply
+     * sitting in wallets nobody has looked at yet, any one of which can be
+     * larger than every wallet found so far. Stopping at 83% once hid the
+     * holder who was owed 89% of the airdrop.
+     */
+    discoveryTarget: Number(process.env.DISCOVERY_TARGET || 99.5),
     exclude: new Set(
       (process.env.EXCLUDE_ADDRESSES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
     ),

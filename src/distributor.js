@@ -283,16 +283,23 @@ export function createDistributor({ onEvent, db }) {
 
     if (c.chainFallback && chain) {
       console.warn(`[airdrop] indexers unavailable (${tried.join(' · ')}) — rebuilding holders from Transfer logs`)
-      const built = await chain.balances(token, {
-        startBlock: budget?.startBlock ?? c.chainStartBlock ?? undefined,
-        maxCalls: budget?.maxCalls ?? c.chainMaxCalls,
-        maxLookback: budget?.lookback,
-        deadline: budget?.deadline,
+      // Ask the chain what each address holds NOW, rather than replaying every
+      // transfer the token has ever made. The logs are only used to discover
+      // which addresses to ask about, so this converges in seconds regardless
+      // of how old the coin is.
+      const built = await chain.currentBalances(token, {
+        totalSupply: supplyRaw,
+        targetCoverage: c.discoveryTarget / 100,
+        deadline: budget?.deadline ?? Date.now() + 120_000,
       })
-      // A probe returns what it managed to see and says so; a payout must not.
-      if (built.partial && !budget) {
+      // Never pay over a partial holder set. The supply not accounted for is
+      // not noise — it is wallets nobody has looked at, and one of them can be
+      // bigger than everything found so far.
+      if (!built.complete) {
         throw new Error(
-          `chain scan incomplete (scanned to block ${built.scannedTo}) — set TOKEN_START_BLOCK to the token's first block, or raise CHAIN_MAX_CALLS`
+          `only accounted for ${built.coveragePct.toFixed(1)}% of supply (need ${c.discoveryTarget}%) after searching back to ` +
+            `block ${built.scannedFrom}. The rest sits in wallets that have not moved recently, and any one of them could be ` +
+            `owed more than everyone found so far. Widen the search or set BLOCKSCOUT_API_KEY to read holders from the indexer.`
         )
       }
       const contracts = await chain.contractsAmong(
@@ -305,9 +312,9 @@ export function createDistributor({ onEvent, db }) {
       return {
         map: built.map,
         contracts,
-        source: 'rpc-transfer-logs',
-        partial: built.partial,
-        scannedFrom: built.deployBlock,
+        source: 'rpc-balanceof',
+        partial: !built.complete,
+        scannedFrom: built.scannedFrom,
         scannedTo: built.scannedTo,
       }
     }
