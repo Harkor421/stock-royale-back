@@ -1040,6 +1040,7 @@ export function createDistributor({ onEvent, db }) {
       const msg = `${winner.symbol} has no WETH pool on this router, so it cannot be bought. Nothing was spent.`
       console.warn(`[airdrop] ${msg}`)
       emit({ type: 'airdropError', ticker: winner.symbol, round, message: msg, noPool: true })
+      db?.recordUnpaidRound({ round, ticker: winner.symbol, name: winner.name, reason: 'no liquidity pool' })
       return
     }
     busy = true
@@ -1105,7 +1106,11 @@ export function createDistributor({ onEvent, db }) {
       )
     } catch (e) {
       console.error('[airdrop] failed:', e.message)
-      emit({ type: 'airdropError', ticker: winner.symbol, message: String(e.message || e) })
+      emit({ type: 'airdropError', ticker: winner.symbol, round, message: String(e.message || e) })
+      // The round happened whether or not money moved — record it either way,
+      // so an empty history means "nothing has been paid" and never "the
+      // recorder is broken".
+      db?.recordUnpaidRound({ round, ticker: winner.symbol, name: winner.name, reason: String(e.message || e) })
     } finally {
       busy = false
       pollHolders() // refresh for the next round

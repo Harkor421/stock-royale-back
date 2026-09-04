@@ -128,6 +128,8 @@ export function createDb(url) {
             ticker,
             name,
             usdPerUnit: usdPerUnit ?? null,
+            paid: true,
+            reason: null,
             recipients: items.length,
             totalAmount: items.reduce((a, i) => a + i.amount, 0),
             totalUsd: usdPerUnit ? items.reduce((a, i) => a + i.amount, 0) * usdPerUnit : null,
@@ -142,6 +144,43 @@ export function createDb(url) {
       console.info(`[db] stored ${inserted.length} payout(s) for round ${round?.label ?? roundId}`)
     } catch (e) {
       console.error('[db] recordDistribution:', e.message)
+    }
+  }
+
+  /**
+   * A round that did not pay, and why.
+   *
+   * Only successful distributions were being written, so a round that failed —
+   * an empty pot, a stock with no pool — left no trace at all. Someone looking
+   * at the history saw rounds happening on screen and nothing recorded, with no
+   * way to tell "nobody has been paid yet" apart from "the recorder is broken".
+   * A round is a fact whether or not money moved.
+   */
+  async function recordUnpaidRound({ round, ticker, name, reason }) {
+    if (!ready) return
+    const roundId = round?.id ?? Math.floor(Date.now() / 300_000)
+    try {
+      await rounds.updateOne(
+        { roundId },
+        {
+          $set: {
+            roundId,
+            label: round?.label ?? null,
+            startedAt: round?.startedAt ?? null,
+            ticker,
+            name: name ?? null,
+            paid: false,
+            reason,
+            recipients: 0,
+            totalAmount: 0,
+            totalUsd: 0,
+            ts: Date.now(),
+          },
+        },
+        { upsert: true }
+      )
+    } catch (e) {
+      console.error('[db] recordUnpaidRound:', e.message)
     }
   }
 
@@ -189,6 +228,7 @@ export function createDb(url) {
   return {
     connect,
     recordDistribution,
+    recordUnpaidRound,
     leaderboard,
     walletHistory,
     roundHistory,
