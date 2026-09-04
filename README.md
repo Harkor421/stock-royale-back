@@ -182,8 +182,12 @@ Before pointing real money at a coin, run the whole round against its **real
 holders** without moving anything:
 
 ```
-GET /simulate?token=0x…&ticker=NVDA&shares=100[&from=<launch block>]
+GET /simulate?token=0x…&ticker=NVDA&shares=100&days=7
 ```
+
+`&days=` (or `&hours=`) is how far back to read the coin's history — nobody
+knows their launch block offhand, but everybody knows roughly when it launched.
+`&from=<block>` still works if you do know it.
 
 It is not a mock. It runs the same holder detection, the same pool and
 bonding-curve exclusion, the same on-chain balance check and the same
@@ -203,8 +207,7 @@ It answers three questions:
 **It refuses over a partial view.** A rehearsal built from whoever happened to
 trade inside the scanned window is a confident wrong answer, so it is held to
 the same `MIN_SUPPLY_COVERAGE` floor a live payout is held to. If the scan can't
-reach it, pass `&from=<the block the coin launched at>` or set
-`BLOCKSCOUT_API_KEY`.
+reach it, widen `&days=` or set `BLOCKSCOUT_API_KEY`.
 
 ## Maintenance
 
