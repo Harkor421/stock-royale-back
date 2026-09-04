@@ -150,16 +150,15 @@ export const config = {
  * of the bear crimson (#8b0e18) so buy troops never read as sell troops.
  */
 export const TICKERS = Object.freeze([
+  // Only stocks with a WETH pool on the swap router are here. A round won by a
+  // stock that cannot be bought is a round that cannot pay, so the roster is
+  // exactly the set that can — verified against the chain, see README.
   { symbol: 'NVDA', name: 'Nvidia', color: '#76b900' },
   { symbol: 'TSLA', name: 'Tesla', color: '#e82127' }, // Tesla's actual red
   { symbol: 'AAPL', name: 'Apple', color: '#d8dbe2' },
-  // Amazon gives up the orange to AMD and takes the violet: eight armies need
-  // eight hues you can tell apart at fifty metres, and two oranges is seven.
-  { symbol: 'AMZN', name: 'Amazon', color: '#c46bff' },
   { symbol: 'META', name: 'Meta', color: '#2f7bff' },
-  { symbol: 'MSFT', name: 'Microsoft', color: '#00d4c8' },
-  { symbol: 'GOOGL', name: 'Alphabet', color: '#ffd447' },
   { symbol: 'AMD', name: 'AMD', color: '#ff7a00' },
+  { symbol: 'PLTR', name: 'Palantir', color: '#00d4c8' },
 ])
 
 export const SYMBOLS = TICKERS.map((t) => t.symbol)
