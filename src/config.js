@@ -148,13 +148,15 @@ export const config = {
  */
 export const TICKERS = Object.freeze([
   { symbol: 'NVDA', name: 'Nvidia', color: '#76b900' },
-  { symbol: 'TSLA', name: 'Tesla', color: '#ff6b3d' },
+  { symbol: 'TSLA', name: 'Tesla', color: '#e82127' }, // Tesla's actual red
   { symbol: 'AAPL', name: 'Apple', color: '#d8dbe2' },
-  { symbol: 'AMZN', name: 'Amazon', color: '#ff9f1c' },
+  // Amazon gives up the orange to AMD and takes the violet: eight armies need
+  // eight hues you can tell apart at fifty metres, and two oranges is seven.
+  { symbol: 'AMZN', name: 'Amazon', color: '#c46bff' },
   { symbol: 'META', name: 'Meta', color: '#2f7bff' },
   { symbol: 'MSFT', name: 'Microsoft', color: '#00d4c8' },
   { symbol: 'GOOGL', name: 'Alphabet', color: '#ffd447' },
-  { symbol: 'AMD', name: 'AMD', color: '#c46bff' },
+  { symbol: 'AMD', name: 'AMD', color: '#ff7a00' },
 ])
 
 export const SYMBOLS = TICKERS.map((t) => t.symbol)
