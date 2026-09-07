@@ -339,7 +339,8 @@ export function createDistributor({ onEvent, db }) {
       // bigger than everything found so far.
       if (!built.complete) {
         throw new Error(
-          `only accounted for ${built.coveragePct.toFixed(1)}% of supply (need ${c.discoveryTarget}%) after searching back to ` +
+          `only accounted for ${built.coveragePct.toFixed(1)}% of supply (need ${c.discoveryTarget}%` +
+            `${built.skippedWindows ? `, and ${built.skippedWindows} block window(s) could not be read` : ''}) after searching back to ` +
             `block ${built.scannedFrom}. The rest sits in wallets that have not moved recently, and any one of them could be ` +
             `owed more than everyone found so far. Widen the search or set BLOCKSCOUT_API_KEY to read holders from the indexer.`
         )
