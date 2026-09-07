@@ -157,6 +157,19 @@ export const config = {
      * minutes. Four is well inside that.
      */
     holdersPollMs: Number(process.env.HOLDERS_POLL_MS || 240_000),
+    /**
+     * How long holder discovery may take on the scheduled poll.
+     *
+     * Two minutes was enough before requests were throttled. Throttling is what
+     * keeps the node from escalating a 429 into a Cloudflare challenge, but it
+     * also makes the walk slower — and discovery that runs out of time reports
+     * partial coverage, which is correctly refused, so the snapshot never
+     * lands and the airdrop has nothing to pay over.
+     *
+     * The poll answers no HTTP request, so it can afford the time. Kept safely
+     * under holdersPollMs so two crawls never overlap.
+     */
+    holdersDiscoveryMs: Number(process.env.HOLDERS_DISCOVERY_MS || 210_000),
     holdersStaleMs: Number(process.env.HOLDERS_STALE_MS || 10 * 60_000),
     /**
      * Dev only: synthesize this many holders so the airdrop panel can be built

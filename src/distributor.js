@@ -332,7 +332,7 @@ export function createDistributor({ onEvent, db }) {
       const built = await chain.currentBalances(token, {
         totalSupply: supplyRaw,
         targetCoverage: c.discoveryTarget / 100,
-        deadline: budget?.deadline ?? Date.now() + 120_000,
+        deadline: budget?.deadline ?? Date.now() + c.holdersDiscoveryMs,
       })
       // Never pay over a partial holder set. The supply not accounted for is
       // not noise — it is wallets nobody has looked at, and one of them can be
