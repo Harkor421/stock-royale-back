@@ -236,6 +236,42 @@ trade inside the scanned window is a confident wrong answer, so it is held to
 the same `MIN_SUPPLY_COVERAGE` floor a live payout is held to. If the scan can't
 reach it, widen `&days=` or set `BLOCKSCOUT_API_KEY`.
 
+## Not getting rate-limited
+
+The public node sits behind Cloudflare, and Cloudflare does not merely
+rate-limit a noisy client — it escalates to a **managed challenge** and then
+answers every subsequent request with a **403 HTML page**. That page is not a
+transport error ethers waits out, so one burst during a payout can take the
+whole backend down with it: the holder crawl fails, the pot reads blank, and
+rounds refuse for hours after the node itself has recovered.
+
+Three things prevent it, all in `src/rpc.js`:
+
+- **One provider, shared.** Holder discovery, the pot balance, the swap quotes
+  and the transfers all use the same node, so they share one connection and one
+  rate limit instead of quietly opening four and racing each other into the
+  challenge.
+- **Requests are throttled** (`slotInterval: 120`), so a burst is spread out
+  rather than fired at once. The payout leg alone is one transaction per holder.
+- **429 and 403 are retried** with growing delays instead of thrown. A challenge
+  costs a few seconds, not a round.
+
+Reads are also batched (`batchMaxCount: 20`) — holder discovery makes hundreds
+of `balanceOf` calls in a row, and fewer, larger requests is exactly what the
+edge wants to see.
+
+Two settings matter as much as the transport:
+
+- **`HOLDERS_POLL_MS` is 4 minutes, not 1.** Sixty seconds is fine against an
+  indexer that answers instantly; against the RPC fallback, which walks the
+  chain every time, it is what triggers the 429 in the first place. The snapshot
+  only has to be fresh when a round pays, and `HOLDERS_STALE_MS` already refuses
+  anything older than ten minutes.
+- **`PAYOUT_GAS_ESTIMATE` (90k) is separate from `PAYOUT_GAS_LIMIT` (250k).**
+  The limit is what a transfer reserves; the estimate is what it costs. An
+  ERC-20 transfer here burns 52k–78k gas, so budgeting at the limit overstates
+  the requirement three- to four-fold and refuses rounds the pot could afford.
+
 ## Maintenance
 
 `src/marketHours.js` carries a hard-coded list of US market holidays and half-days through **2027**. Add the next year's dates when they're published, or the game will try to run rounds on a closed tape.

@@ -19,6 +19,7 @@
 import { ethers } from 'ethers'
 import { config, TICKERS } from './config.js'
 import { createChainHolders } from './chainHolders.js'
+import { createProvider } from './rpc.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const now = () => Date.now()
@@ -46,6 +47,41 @@ const ROUTER_ABI = [
  * The tokenized stocks on Robinhood Chain. Every ticker in the game's roster
  * has one — that is why the roster is what it is.
  */
+/**
+ * Split a pot across weights with NO remainder left behind.
+ *
+ * Plain `pot * w / W` truncates every cut, so the leftover — up to one unit per
+ * holder — silently stays in the wallet. Largest-remainder hands those units to
+ * whoever was rounded down hardest.
+ *
+ * Ties break toward the LARGER weight so the result is deterministic and
+ * reproducible from the same snapshot: an audit of a past round has to land on
+ * exactly the same numbers.
+ */
+export function splitLargestRemainder(pot, weights) {
+  const W = weights.reduce((a, b) => a + b, 0n)
+  if (W <= 0n || pot <= 0n) return weights.map(() => 0n)
+
+  const out = new Array(weights.length)
+  const rema = new Array(weights.length)
+  let assigned = 0n
+  for (let i = 0; i < weights.length; i++) {
+    const num = pot * weights[i]
+    out[i] = num / W
+    rema[i] = num % W
+    assigned += out[i]
+  }
+
+  let leftover = pot - assigned // strictly less than weights.length
+  if (leftover > 0n) {
+    const order = rema
+      .map((r, i) => [r, weights[i], i])
+      .sort((x, y) => (y[0] === x[0] ? (y[1] > x[1] ? 1 : y[1] < x[1] ? -1 : x[2] - y[2]) : y[0] > x[0] ? 1 : -1))
+    for (let k = 0; leftover > 0n && k < order.length; k++, leftover--) out[order[k][2]] += 1n
+  }
+  return out
+}
+
 export const STOCK_TOKENS = Object.freeze({
   AAPL: '0xaF3D76f1834A1d425780943C99Ea8A608f8a93f9',
   AMD: '0x86923f96303D656E4aa86D9d42D1e57ad2023fdC',
@@ -58,7 +94,7 @@ export const STOCK_TOKENS = Object.freeze({
 export function createDistributor({ onEvent, db }) {
   const c = config.chain
   const enabled = c.airdrop
-  const provider = c.rpcUrl ? new ethers.JsonRpcProvider(c.rpcUrl, c.chainId) : null
+  const provider = createProvider(c.rpcUrl, c.chainId)
   const wallet = c.privateKey && provider ? new ethers.Wallet(c.privateKey, provider) : null
   const chain = provider ? createChainHolders({ provider, chainId: c.chainId }) : null
   const dryRun = c.dryRun || !wallet || !isAddr(c.token)
@@ -928,14 +964,22 @@ export function createDistributor({ onEvent, db }) {
     let potRaw
     const stock = provider ? new ethers.Contract(address, ERC20_ABI, wallet || provider) : null
     if (dryRun) potRaw = ethers.parseUnits('100', dec)
-    else potRaw = await stock.balanceOf(wallet.address)
+    else {
+      // Pay out what is actually there. A remainder left by an earlier round
+      // belongs to holders too, so the whole balance goes out rather than just
+      // what this round happened to buy.
+      potRaw = await stock.balanceOf(wallet.address)
+    }
     if (potRaw <= 0n) throw new Error(`pot holds no ${ticker}`)
 
-    // pro-rata on exact raw balances — no float anywhere near the split
-    const totalW = rows.reduce((a, r) => a + r.raw, 0n)
-    if (totalW <= 0n) throw new Error('eligible holders hold nothing')
+    // pro-rata on exact raw balances — no float anywhere near the split, and
+    // largest-remainder so the truncated dust reaches holders instead of
+    // silently staying in the wallet
+    const weights = rows.map((r) => r.raw)
+    if (weights.reduce((a, b) => a + b, 0n) <= 0n) throw new Error('eligible holders hold nothing')
+    const cuts = splitLargestRemainder(potRaw, weights)
     const payouts = rows
-      .map((r) => ({ ...r, raw_out: (potRaw * r.raw) / totalW }))
+      .map((r, i) => ({ ...r, raw_out: cuts[i] }))
       .filter((p) => p.raw_out > 0n)
     if (!payouts.length) throw new Error('every cut rounds to zero')
 
@@ -975,7 +1019,10 @@ export function createDistributor({ onEvent, db }) {
         gasLimit = est * 2n
         if (gasLimit < 200_000n) gasLimit = 200_000n
       } catch {}
-      const need = BigInt(payouts.length + 2) * gasLimit * maxFee
+      // Budget on what a transfer COSTS, not on the limit it reserves. Using
+      // the limit here overstates the requirement three- to four-fold and
+      // refuses rounds the pot could comfortably afford.
+      const need = BigInt(payouts.length + 2) * c.payoutGasEstimate * maxFee
       const native = await provider.getBalance(wallet.address)
       if (native < need) {
         console.warn(

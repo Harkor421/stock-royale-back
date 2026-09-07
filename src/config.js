@@ -128,9 +128,35 @@ export const config = {
     exclude: new Set(
       (process.env.EXCLUDE_ADDRESSES || '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean)
     ),
+    /**
+     * The gasLimit put on each transfer: deliberately generous, because a
+     * transfer that runs out of gas is worse than one that reserves too much.
+     * Unused gas is refunded, so overstating this costs nothing.
+     */
     payoutGas: BigInt(process.env.PAYOUT_GAS_LIMIT || 250_000),
+    /**
+     * What a transfer actually COSTS, for sizing the round's gas budget.
+     *
+     * These are two different numbers and using the limit for both is a real
+     * problem: an ERC-20 transfer on this chain burns 52k-78k gas, so budgeting
+     * at the 250k limit overstates the requirement three- to four-fold and
+     * refuses rounds the pot could comfortably afford.
+     */
+    payoutGasEstimate: BigInt(process.env.PAYOUT_GAS_ESTIMATE || 90_000),
     sendDelayMs: Number(process.env.SEND_DELAY_MS || 250),
-    holdersPollMs: Number(process.env.HOLDERS_POLL_MS || 60_000),
+    /**
+     * How often the holder snapshot is rebuilt.
+     *
+     * Sixty seconds was fine when an indexer answered instantly. It is NOT fine
+     * on the RPC fallback, which walks the chain every time — doing that once a
+     * minute alongside the pot poll is what got the public node to answer 429
+     * on The Retarded Index, after which nothing could be read at all.
+     *
+     * The snapshot only has to be fresh when a round pays out, and
+     * holdersStaleMs already refuses to distribute over anything older than ten
+     * minutes. Four is well inside that.
+     */
+    holdersPollMs: Number(process.env.HOLDERS_POLL_MS || 240_000),
     holdersStaleMs: Number(process.env.HOLDERS_STALE_MS || 10 * 60_000),
     /**
      * Dev only: synthesize this many holders so the airdrop panel can be built
