@@ -287,6 +287,7 @@ export function createDistributor({ onEvent, db }) {
 
   let holdersSupply = 0
   let holdersSource = null
+  let warnedNoToken = false
 
   /**
    * Get the holder set, from whichever source can actually answer.
@@ -823,6 +824,7 @@ export function createDistributor({ onEvent, db }) {
       const nextEth = Number(fmtUnits(budget, 18))
       pot = {
         ready: true,
+        awaitingToken: !isAddr(c.token),
         address: wallet.address,
         addrUrl: explorerAddr(wallet.address),
         eth,
@@ -1078,6 +1080,19 @@ export function createDistributor({ onEvent, db }) {
       console.warn('[airdrop] previous airdrop still running — skipping this round')
       return
     }
+    // No coin configured yet. Say it once and stand down — not once every five
+    // minutes, and without filing a failed round each time: 288 rows a day of
+    // "there is no coin" is noise that buries the failures that matter.
+    if (!isAddr(c.token)) {
+      if (!warnedNoToken) {
+        warnedNoToken = true
+        console.warn('[airdrop] no TOKEN set — rounds run, nothing is bought or paid. Set TOKEN to the coin whose holders should receive the airdrop.')
+      }
+      emit({ type: 'airdropError', ticker: winner.symbol, round, noToken: true,
+        message: 'No coin is configured yet, so this round was not paid out.' })
+      return
+    }
+
     const address = STOCK_TOKENS[winner.symbol]
     if (!address) {
       console.warn(`[airdrop] no tokenized stock known for ${winner.symbol}`)
@@ -1172,7 +1187,10 @@ export function createDistributor({ onEvent, db }) {
     get dryRun() { return dryRun },
     /** Everything needed to debug holder detection on a new launchpad token. */
     diagnostics() {
-      return diagnostics || { ts: null, token: c.token || null, rejected: 'no crawl yet' }
+      if (!isAddr(c.token)) {
+        return { ts: null, token: null, awaitingToken: true, rejected: 'no TOKEN configured yet' }
+      }
+      return diagnostics || { ts: null, token: c.token, rejected: 'no crawl yet' }
     },
     refreshHolders: pollHolders,
     probe,

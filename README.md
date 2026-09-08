@@ -272,7 +272,25 @@ Two settings matter as much as the transport:
   ERC-20 transfer here burns 52k–78k gas, so budgeting at the limit overstates
   the requirement three- to four-fold and refuses rounds the pot could afford.
 
-## Launching with a different coin
+## Launching
+
+**Set `TOKEN` to the coin's contract address. That is the whole launch.**
+
+Everything else is already configured. Railway redeploys on the variable change,
+which reloads the token's decimals, supply and symbol, restarts holder discovery
+against it, and re-probes which stocks are buyable.
+
+Until it is set, the game runs normally — real tape, real rounds, a real winner
+every five minutes — and simply does not buy or pay. It says so on screen rather
+than failing, and it does not file a failed round every five minutes for a
+problem that is just "not launched yet".
+
+The database does not need clearing either: every payout, running total and
+round is stamped with the coin it belongs to and the reads filter to whatever
+`TOKEN` currently is, so a test run against one token cannot appear in another's
+leaderboard.
+
+## Switching coins later
 
 Setting **`TOKEN`** to the new contract address is the whole change. Railway
 redeploys on the variable change, which reloads the token's decimals, supply and
