@@ -17,6 +17,13 @@ export const config = {
   maxTradesPerSec: Number(process.env.MAX_TRADES_PER_SEC || 8),
   /** Block prints (dolphin) forwarded per symbol per second. Whales always pass. */
   maxBlocksPerSec: Number(process.env.MAX_BLOCKS_PER_SEC || 4),
+  /**
+   * How often the REST quote poller runs. Finnhub's free tier allows 60 calls a
+   * minute; six symbols every ten seconds is 36, leaving room for the
+   * round-start seeding burst.
+   */
+  quotePollMs: Number(process.env.QUOTE_POLL_MS || 10_000),
+
   /** How often standings are pushed to clients. */
   standingsHz: Number(process.env.STANDINGS_HZ || 5),
   /** Rolling window (seconds) the buy/sell "pressure" bars aggregate over. */

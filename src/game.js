@@ -97,7 +97,7 @@ function windowSums(S) {
   return { buy, sell, bc, sc }
 }
 
-export function createGame({ onEvent }) {
+export function createGame({ onEvent, tradeStreamLive }) {
   /** @type {Map<string, ReturnType<makeSymbol>>} */
   const syms = new Map(TICKERS.map((t) => [t.symbol, makeSymbol(t)]))
   const roster = TICKERS.map((t) => ({ symbol: t.symbol, name: t.name, color: t.color }))
@@ -106,6 +106,7 @@ export function createGame({ onEvent }) {
   let session = sessionInfo()
   let history = [] // most recent winners first
   let lastStandings = []
+  let quotesUsed = false
   let seq = 0
   let timer = null
 
@@ -284,6 +285,27 @@ export function createGame({ onEvent }) {
     }
   }
 
+  /**
+   * A price with no print behind it.
+   *
+   * The quote poller supplies these when the trade stream is silent. The price
+   * is real; what is missing is the individual trades, so this moves the
+   * standings and nothing else — no volume is invented to fill the gap, and the
+   * buy/sell pressure bars simply stay where they were.
+   */
+  function onQuote({ symbol, price }) {
+    const S = syms.get(symbol)
+    if (!S || !(price > 0) || !session.live) return
+    if (S.price === price) return
+    S.prevPrice = S.price
+    S.price = price
+    if (!S.baseline) S.baseline = price
+    if (!S.high || price > S.high) S.high = price
+    if (!S.low || price < S.low) S.low = price
+    S.pct = S.baseline > 0 ? (price / S.baseline - 1) * 100 : 0
+    quotesUsed = true
+  }
+
   // -- standings ------------------------------------------------------------
 
   function standings() {
@@ -369,6 +391,7 @@ export function createGame({ onEvent }) {
 
   return {
     onTrade,
+    onQuote,
     roster,
     start() {
       session = sessionInfo()
@@ -397,6 +420,9 @@ export function createGame({ onEvent }) {
         rows: lastStandings.length ? lastStandings : standings(),
         history: history.map((h) => ({ round: h.round, winner: h.winner, podium: h.podium })),
         roundMs: config.roundMs,
+        // Whether the individual prints are arriving, or only the prices. The
+        // UI says so rather than implying a tape that isn't there.
+        quotesOnly: quotesUsed && !tradeStreamLive?.(),
         serverNow: Date.now(),
       }
     },

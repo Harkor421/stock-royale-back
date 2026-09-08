@@ -26,12 +26,17 @@ const ENDPOINT = 'wss://ws.finnhub.io'
 const CONTENDED_BACKOFF_MS = 45_000
 const MAX_BACKOFF_MS = 180_000
 
-export function createFinnhubFeed({ onTrade, onStatus }) {
+export function createFinnhubFeed({ onTrade, onStatus, shouldExpectTrades }) {
   let ws = null
   let backoff = 1000
   let stopped = false
   let heartbeat = null
   let lastMessageAt = 0
+  // Tracked SEPARATELY from lastMessageAt on purpose. Finnhub sends its own
+  // pings, so counting any message as liveness makes a socket that delivers
+  // nothing but pings look perfectly healthy — which is exactly how a dead
+  // stream sat unnoticed while the game ran on stale prices.
+  let lastTradeAt = 0
   let openedAt = 0
   let contended = 0
 
@@ -43,6 +48,7 @@ export function createFinnhubFeed({ onTrade, onStatus }) {
       backoff = 1000
       openedAt = Date.now()
       lastMessageAt = Date.now()
+      lastTradeAt = Date.now()
       for (const s of SYMBOLS) ws.send(JSON.stringify({ type: 'subscribe', symbol: s }))
       console.info(`[finnhub] connected — subscribed to ${SYMBOLS.join(', ')}`)
       onStatus?.({ connected: true })
@@ -62,6 +68,7 @@ export function createFinnhubFeed({ onTrade, onStatus }) {
         return
       }
       if (msg.type !== 'trade' || !Array.isArray(msg.data)) return
+      if (msg.data.length) lastTradeAt = Date.now()
       for (const t of msg.data) {
         const price = Number(t.p)
         const size = Number(t.v)
@@ -100,8 +107,12 @@ export function createFinnhubFeed({ onTrade, onStatus }) {
     // while the tape should be running (the caller decides via shouldBeLive).
     clearInterval(heartbeat)
     heartbeat = setInterval(() => {
-      if (ws?.readyState === WebSocket.OPEN && Date.now() - lastMessageAt > 90_000) {
-        console.warn('[finnhub] 90s of silence — recycling the socket')
+      if (ws?.readyState !== WebSocket.OPEN) return
+      // Only trades count. A stream that pings and delivers nothing is dead for
+      // our purposes; the caller decides when that matters, since outside
+      // market hours silence is correct.
+      if (shouldExpectTrades?.() && Date.now() - lastTradeAt > 120_000) {
+        console.warn('[finnhub] no trades for 120s while the tape should be live — recycling the socket')
         try { ws.terminate() } catch {}
       }
     }, 30_000)
@@ -135,6 +146,43 @@ export function createFinnhubFeed({ onTrade, onStatus }) {
     get connected() {
       return ws?.readyState === WebSocket.OPEN
     },
+    /** Has the stream actually delivered a trade recently? */
+    get streaming() {
+      return ws?.readyState === WebSocket.OPEN && Date.now() - lastTradeAt < 120_000
+    },
+  }
+}
+
+/**
+ * The quote poller — the safety net under the trade stream.
+ *
+ * Finnhub's free plan barely streams US equity trades (measured: three prints
+ * in twenty-five seconds across three mega-caps during regular hours, then the
+ * socket dropped), but its REST /quote endpoint answers reliably. Prices from
+ * quotes are real prices; what they lack is the individual prints, so the
+ * armies still rank correctly even when nothing is streaming.
+ *
+ * Paced to stay inside the free tier's 60 calls a minute, with room for the
+ * round-start seeding burst on top.
+ */
+export function createQuoteFeed({ onQuote, intervalMs = 10_000, shouldPoll }) {
+  let timer = null
+  async function tick() {
+    if (shouldPoll && !shouldPoll()) return
+    try {
+      const quotes = await fetchQuotes()
+      for (const [symbol, q] of quotes) onQuote({ symbol, price: q.price })
+    } catch (e) {
+      console.warn('[finnhub] quote poll:', e.message)
+    }
+  }
+  return {
+    start() {
+      tick()
+      timer = setInterval(tick, intervalMs)
+      console.info(`[finnhub] quote poller every ${intervalMs / 1000}s as the price safety net`)
+    },
+    stop() { clearInterval(timer) },
   }
 }
 
