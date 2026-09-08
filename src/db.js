@@ -128,6 +128,7 @@ export function createDb(url) {
             ticker,
             name,
             usdPerUnit: usdPerUnit ?? null,
+            token,
             paid: true,
             reason: null,
             recipients: items.length,

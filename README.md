@@ -272,6 +272,21 @@ Two settings matter as much as the transport:
   ERC-20 transfer here burns 52k–78k gas, so budgeting at the limit overstates
   the requirement three- to four-fold and refuses rounds the pot could afford.
 
+## Launching with a different coin
+
+Setting **`TOKEN`** to the new contract address is the whole change. Railway
+redeploys on the variable change, which reloads the token's decimals, supply and
+symbol, restarts holder discovery against it, and re-probes which stocks are
+buyable.
+
+Nothing else needs touching, and in particular **the database does not need
+clearing**: every payout, running total and round is stamped with the coin it
+belongs to, and the leaderboard filters to the coin currently configured. A test
+run against one token cannot show up in another's totals.
+
+The UI names the coin from its own contract symbol, so the onboarding, the
+leaderboard and the airdrop panel all update themselves.
+
 ## Maintenance
 
 `src/marketHours.js` carries a hard-coded list of US market holidays and half-days through **2027**. Add the next year's dates when they're published, or the game will try to run rounds on a closed tape.

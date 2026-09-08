@@ -13,6 +13,7 @@
 
 import http from 'http'
 import { WebSocketServer } from 'ws'
+import { config } from './config.js'
 
 export function createHub({ port, game, db }) {
   const clients = new Set()
@@ -41,13 +42,13 @@ export function createHub({ port, game, db }) {
     // --- the public record: who has been paid what, ever ---
     if (url.pathname === '/leaderboard') {
       return db
-        .leaderboard(Number(url.searchParams.get('limit') || 100))
+        .leaderboard(Number(url.searchParams.get('limit') || 100), config.chain.token || null)
         .then(json)
         .catch((e) => json({ ready: false, rows: [], error: e.message }))
     }
     if (url.pathname === '/rounds') {
       return db
-        .roundHistory(Number(url.searchParams.get('limit') || 50))
+        .roundHistory(Number(url.searchParams.get('limit') || 50), config.chain.token || null)
         .then(json)
         .catch((e) => json({ ready: false, rows: [], error: e.message }))
     }
@@ -88,7 +89,7 @@ export function createHub({ port, game, db }) {
     }
     if (url.pathname.startsWith('/wallet/')) {
       return db
-        .walletHistory(decodeURIComponent(url.pathname.slice('/wallet/'.length)))
+        .walletHistory(decodeURIComponent(url.pathname.slice('/wallet/'.length)), 200, config.chain.token || null)
         .then(json)
         .catch((e) => json({ ready: false, rows: [], error: e.message }))
     }
